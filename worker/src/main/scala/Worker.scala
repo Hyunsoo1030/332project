@@ -1,3 +1,3 @@
-object Worker {
+object Worker extends App{
 
 }

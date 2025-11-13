@@ -1,3 +1,3 @@
-object Master {
+object Master extends App {
 
 }
