@@ -1,0 +1,38 @@
+// common/src/main/protobuf/master_worker_protocol.proto
+syntax = "proto3";
+
+package com.project332.proto; // 패키지 정의
+
+// 마스터가 워커에게 보낼 메시지 (예: 작업 할당)
+message TaskAssignment {
+  string taskId = 1;
+  string payload = 2; // 실제 작업 데이터
+}
+
+// 워커가 마스터에게 보낼 메시지 (예: 작업 상태 보고)
+message WorkerStatus {
+  string workerId = 1;
+  enum Status {
+    IDLE = 0;
+    PROCESSING = 1;
+    FINISHED = 2;
+    ERROR = 3;
+  }
+  Status status = 2;
+  string details = 3;
+}
+
+// 마스터-워커 서비스 정의
+service MasterWorkerService {
+  // 워커 -> 마스터 (단방향 RPC 예시: 상태 보고)
+  rpc ReportStatus(WorkerStatus) returns (google.protobuf.Empty); // google.protobuf.Empty는 빈 응답을 의미
+
+  // 마스터 -> 워커 (단방향 RPC 예시: 작업 할당)
+  rpc AssignTask(TaskAssignment) returns (google.protobuf.Empty);
+
+  // 마스터 -> 워커 (스트리밍 예시: 지속적인 명령/데이터 전송)
+  // rpc StreamCommands(stream TaskAssignment) returns (google.protobuf.Empty);
+}
+
+// Protobuf에서 기본적으로 제공하는 빈 메시지
+import "google/protobuf/empty.proto";
