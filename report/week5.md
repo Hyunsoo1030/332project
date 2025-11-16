@@ -18,9 +18,9 @@
 - 라이브러리 버전 통합에서 어려움을 겪었지만, master와 worker간 통신 가능한 상태
 
 
-![image.png](/Users/hyunsoo13/Desktop/2025/software design methods/332project/report/image/master_test.png)
+![image.png](image/master_test.png)
 
-![image.png](/Users/hyunsoo13/Desktop/2025/software design methods/332project/report/image/worker_test.png)
+![image.png](image/worker_test.png)
 
 - 이제 도커 환경까지 구축해서 실제 클러스터 master - worker 처럼 만들 계획
 - problem definition은 피피티에 도식화해놓은 상태
