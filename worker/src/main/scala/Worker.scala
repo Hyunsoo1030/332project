@@ -24,12 +24,13 @@ object Worker extends App {
 
   val request = WorkerData(
     fileSize = 123456L,
-    workerPort = 50051
+    workerHost = host,
+    workerPort = port
   )
 
   println("[WORKER] Sending SendWorkerData RPC...")
   val responseF: Future[WorkerDataResponse] =
-    stub.sendWorkerData(request)
+    stub.registerWorker(request)
 
   Await.result(responseF, 5.seconds)
 

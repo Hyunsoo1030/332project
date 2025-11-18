@@ -3,7 +3,7 @@ syntax = "proto3";
 package proto;
 
 service MasterService {
-  rpc SendWorkerData(WorkerData) returns (WorkerDataResponse);
+  rpc registerWorker(WorkerData) returns (WorkerDataResponse);
 }
 
 service WorkerService {
@@ -15,7 +15,8 @@ service WorkerService {
 
 message WorkerData {
   int64 fileSize = 1;
-  int32 workerPort = 2;
+  string workerHost = 2;
+  int32 workerPort = 3;
 }
 message WorkerDataResponse {}
 
