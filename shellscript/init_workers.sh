@@ -6,7 +6,7 @@ export LC_ALL=C
 export LANG=C
 
 
-MASTER_IP="2.2.2.100"
+MASTER_IP="2.2.2.254"
 MASTER_PORT=9000
 WORKER_PORT=50051
 
@@ -33,7 +33,7 @@ for i in $(seq 101 120); do
   # 2) 원격에서 워커 실행
   ssh navy@$IP \
     "MASTER_IP=$MASTER_IP MASTER_PORT=$MASTER_PORT \
-     SELF_IP=$IP WORKER_PORT=$WORKER_PORT \
+     WORKER_IP=$IP WORKER_PORT=$WORKER_PORT \
      nohup java -jar ~/$REMOTE_JAR_NAME > worker.log 2>&1 &"
 done
 
