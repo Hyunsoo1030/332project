@@ -12,6 +12,27 @@ lazy val sharedDependencies = Seq(
   "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalaPbVersion
 )
 
+lazy val commonAssemblySettings = Seq(
+  assembly / assemblyMergeStrategy := {
+    // 1) netty 버전 파일은 첫 번째 것만 사용
+    case PathList("META-INF", "io.netty.versions.properties") =>
+      MergeStrategy.first
+
+    // 2) ServiceLoader용 파일은 여러 JAR의 내용을 이어 붙여야 함
+    //    gRPC가 여기서 ManagedChannelProvider, NameResolverProvider 등을 찾음
+    case PathList("META-INF", "services", xs @ _*) =>
+      MergeStrategy.concat
+
+    // 3) 그 외 META-INF 잡다한 것들은 버려도 됨 (라이선스, 서명 등)
+    case PathList("META-INF", xs @ _*) =>
+      MergeStrategy.discard
+
+    // 4) 나머지는 기본적으로 첫 번째 것을 사용
+    case _ =>
+      MergeStrategy.first
+  }
+)
+
 // A. common: proto + 코드 생성
 lazy val common = project.in(file("common"))
   .settings(
@@ -41,19 +62,10 @@ lazy val worker = project.in(file("worker"))
     libraryDependencies ++= sharedDependencies,
     Compile / unmanagedSourceDirectories +=
       (common / Compile / sourceManaged).value,
-
-    assembly / mainClass := Some("worker.Worker"),      // 실제 워커 main object 이름
-    assembly / assemblyJarName := "worker-assembly.jar",
-
-    assembly / assemblyMergeStrategy := {
-      case PathList("META-INF", "io.netty.versions.properties") =>
-        MergeStrategy.first
-      case PathList("META-INF", xs @ _*) =>
-        MergeStrategy.discard
-      case _ =>
-        MergeStrategy.first
-    }
+    assembly / mainClass := Some("worker.Worker"),      // 실제 main object
+    assembly / assemblyJarName := "worker-assembly.jar"
   )
+  .settings(commonAssemblySettings: _*)
 
 // D. root: aggregator
 lazy val root = project.in(file("."))
