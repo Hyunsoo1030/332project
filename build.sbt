@@ -1,3 +1,6 @@
+import sbtassembly.MergeStrategy
+import sbtassembly.PathList
+
 scalaVersion := "2.13.16"
 
 val grpcVersion    = "1.62.2"
@@ -37,7 +40,19 @@ lazy val worker = project.in(file("worker"))
     scalaVersion := "2.13.16",
     libraryDependencies ++= sharedDependencies,
     Compile / unmanagedSourceDirectories +=
-      (common / Compile / sourceManaged).value
+      (common / Compile / sourceManaged).value,
+
+    assembly / mainClass := Some("worker.Worker"),      // 실제 워커 main object 이름
+    assembly / assemblyJarName := "worker-assembly.jar",
+
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", "io.netty.versions.properties") =>
+        MergeStrategy.first
+      case PathList("META-INF", xs @ _*) =>
+        MergeStrategy.discard
+      case _ =>
+        MergeStrategy.first
+    }
   )
 
 // D. root: aggregator
