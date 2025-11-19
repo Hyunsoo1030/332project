@@ -30,10 +30,11 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
 object Master extends App {
   implicit val ec: ExecutionContext = ExecutionContext.global
 
-  val port = 9000
+
   var workerAddress: List[(String, Int)] = Nil // 워커 주소(Host, Port) 튜플 리스트
   var workerChannels: List[Any] = Nil
 
+  val port = 9000
   val server: Server =
     ServerBuilder
       .forPort(port)
