@@ -17,6 +17,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.."; pwd)"
 JAR_PATH="$REPO_ROOT/worker/target/scala-2.13/worker_2.13-0.1.0-SNAPSHOT.jar"
 REMOTE_JAR_NAME="worker.jar"
 
+# gensort 경로
+GENSORT_PATH="$REPO_ROOT/gensort"
+
 # JAR 존재 확인
 if [[ ! -f "$JAR_PATH" ]]; then
   echo "JAR not found: $JAR_PATH"
@@ -29,6 +32,12 @@ for i in $(seq 101 120); do
 
   # 1) JAR 복사
   scp "$JAR_PATH" navy@$IP:~/$REMOTE_JAR_NAME
+
+  # +) gensort 파일 생성 및 배포
+      OUTPUT_FILE="$GENSORT_DIR/testinput_$i"
+      echo "=== Generating data file for $IP: $OUTPUT_FILE ==="
+      (cd "$GENSORT_DIR" && ./gensort -a 100000 "$OUTPUT_FILE")
+      scp "$OUTPUT_FILE" navy@$IP:~/
 
   sbt "master/run"
 
