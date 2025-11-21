@@ -19,6 +19,12 @@ REMOTE_JAR_NAME="worker.jar"
 
 # gensort 경로
 GENSORT_PATH="$REPO_ROOT/gensort"
+# 총 데이터 파일 생성
+ALL_INPUT="$GENSORT_PATH/all_input"
+(cd "$GENSORT_PATH" && ./gensort -a 2000000 "$ALL_INPUT")
+# 데이터 분할
+(cd "$GENSORT_PATH" && split -l 100000 "$ALL_INPUT" chunk_)
+echo "=== Complete splitting big input file into 100000-line chunks ==="
 
 # JAR 존재 확인
 if [[ ! -f "$JAR_PATH" ]]; then
@@ -34,12 +40,25 @@ for i in $(seq 101 120); do
   scp "$JAR_PATH" navy@$IP:~/$REMOTE_JAR_NAME
 
   # +) gensort 파일 생성 및 배포
-      OUTPUT_FILE="$GENSORT_DIR/testinput_$i"
-      echo "=== Generating data file for $IP: $OUTPUT_FILE ==="
-      (cd "$GENSORT_DIR" && ./gensort -a 100000 "$OUTPUT_FILE")
-      scp "$OUTPUT_FILE" navy@$IP:~/
+  # 처리할 chunk 파일 선택
+    CHUNK_FILE=$(printf "chunk_%s" $(printf "%02d" $chunk_index | awk '{
+      # 숫자를 aa, ab, ac...처럼 변환
+      letters = "abcdefghijklmnopqrstuvwxyz";
+      first = int($1 / 26);
+      second = $1 % 26;
+      printf "%c%c", substr(letters, first+1, 1), substr(letters, second+1, 1);
+    }'))
 
-  sbt "master/run"
+    FULL_CHUNK_PATH="$GENSORT_PATH/$CHUNK_FILE"
+
+    if [[ ! -f "$FULL_CHUNK_PATH" ]]; then
+      echo "Error: chunk file not found: $FULL_CHUNK_PATH"
+      exit 1
+    fi
+
+    echo " -> Sending data file $FULL_CHUNK_PATH to $IP"
+
+  #sbt "master/run"
 
   # 2) 원격에서 워커 실행
   ssh navy@$IP \
