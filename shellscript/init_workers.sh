@@ -39,24 +39,23 @@ for i in $(seq 101 120); do
   # 1) JAR 복사
   scp "$JAR_PATH" navy@$IP:~/$REMOTE_JAR_NAME
 
-  # +) gensort 파일 생성 및 배포
-  # 처리할 chunk 파일 선택
-    CHUNK_FILE=$(printf "chunk_%s" $(printf "%02d" $chunk_index | awk '{
-      # 숫자를 aa, ab, ac...처럼 변환
-      letters = "abcdefghijklmnopqrstuvwxyz";
-      first = int($1 / 26);
-      second = $1 % 26;
-      printf "%c%c", substr(letters, first+1, 1), substr(letters, second+1, 1);
-    }'))
+  # +) 데이터 chunk 각 워커에 보내기
+  idx=$((i - 101))
+  # 알파벳 두 글자(aa, ab, ...)로 split chunk명 구함
+  first=$((idx / 26))
+  second=$((idx % 26))
+  letters=abcdefghijklmnopqrstuvwxyz
+  CHUNK_SUFFIX="${letters:$first:1}${letters:$second:1}"
+  CHUNK_FILE="chunk_$CHUNK_SUFFIX"
+  FULL_CHUNK_PATH="$GENSORT_PATH/$CHUNK_FILE"
 
-    FULL_CHUNK_PATH="$GENSORT_PATH/$CHUNK_FILE"
+  # chunk 존재 체크
+  if [[ ! -f "$FULL_CHUNK_PATH" ]]; then
+    echo "Error: chunk file not found: $FULL_CHUNK_PATH"
+    exit 1
+  fi
 
-    if [[ ! -f "$FULL_CHUNK_PATH" ]]; then
-      echo "Error: chunk file not found: $FULL_CHUNK_PATH"
-      exit 1
-    fi
-
-    echo " -> Sending data file $FULL_CHUNK_PATH to $IP"
+  scp "$FULL_CHUNK_PATH" navy@$IP:~/$CHUNK_FILE
 
   #sbt "master/run"
 
