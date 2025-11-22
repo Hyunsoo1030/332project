@@ -16,8 +16,7 @@ import com.google.protobuf.ByteString
 
 
 object Worker extends App {
-
-  implicit val ec: ExecutionContext = ExecutionContext.global
+   implicit val ec: ExecutionContext = ExecutionContext.global
 
    val masterIp    = sys.env("MASTER_IP")
    val masterPort  = sys.env("MASTER_PORT").toInt
