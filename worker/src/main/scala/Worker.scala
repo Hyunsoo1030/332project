@@ -92,41 +92,39 @@ class WorkerServiceImpl(dataPath: String           // worker 로컬 데이터 �
 //    )
 //  }
 
-  override def getSamples(req: SampleRequest): Future[Pivots] = Future {
-    println(s"[WORKER] getSamples called. dataPath=$dataPath")
+  override def getSamples(req: SampleRequest): Future[Pivots] = {
+    Future {
+      println("[WORKER] getSamples called.")
 
-    try {
-      val path = Paths.get(dataPath)
-
-      if (!Files.exists(path)) {
-        println(s"[WORKER] ERROR: data file not found: $dataPath")
-        return Pivots()
-      }
-      if (!Files.isRegularFile(path)) {
-        println(s"[WORKER] ERROR: dataPath is not a file: $dataPath")
-        return Pivots()
-      }
-
-      val fileSize = Files.size(path)
-      println(s"[WORKER] fileSize = $fileSize bytes")
-
-      val toRead: Int = math.min(fileSize, SampleBytes).toInt   // SampleBytes = 1MB
-      val buf = new Array[Byte](toRead)
-
-      val raf = new RandomAccessFile(path.toFile, "r")
       try {
-        raf.readFully(buf, 0, toRead)
-      } finally raf.close()
+        val path = Paths.get(dataPath)
 
-      println(s"[WORKER] read $toRead bytes successfully.")
+        if (!Files.exists(path)) {
+          println(s"[WORKER] ERROR: file not found: $dataPath")
+          Pivots()
+        }
+        else if (!Files.isRegularFile(path)) {
+          println(s"[WORKER] ERROR: not a file: $dataPath")
+          Pivots()
+        }
+        else {
+          val fileSize = Files.size(path)
+          val toRead   = math.min(fileSize, SampleBytes).toInt
+          val buf      = new Array[Byte](toRead)
 
-      // TODO: buf를 써서 pivots 계산
-      Pivots()
-    } catch {
-      case e: Throwable =>
-        println(s"[WORKER] EXCEPTION in getSamples: ${e.getClass.getName}: ${e.getMessage}")
-        e.printStackTrace()
-        Pivots()
+          val raf = new RandomAccessFile(path.toFile, "r")
+          try raf.readFully(buf, 0, toRead)
+          finally raf.close()
+
+          println(s"[WORKER] read $toRead bytes successfully.")
+          Pivots()
+        }
+      } catch {
+        case e: Throwable =>
+          println(s"[WORKER] EXCEPTION in getSamples: ${e.getMessage}")
+          e.printStackTrace()
+          Pivots()
+      }
     }
   }
 
