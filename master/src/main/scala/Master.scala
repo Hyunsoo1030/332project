@@ -29,9 +29,9 @@ object Master extends App {
 //    server.shutdown()
 //  }
 
-//  println("Press ENTER to terminate master server.")
-//  StdIn.readLine()
-//  server.shutdown()
+  println("Press ENTER to terminate master server.")
+  StdIn.readLine()
+  server.shutdown()
 }
 
 // 실제 RPC 구현체
