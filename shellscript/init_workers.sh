@@ -30,8 +30,6 @@ for i in $(seq 101 120); do
   # 1) JAR 복사
   scp "$JAR_PATH" navy@$IP:~/$REMOTE_JAR_NAME
 
-  sbt "master/run"
-
   # 2) 원격에서 워커 실행
   ssh navy@$IP \
     "MASTER_IP=$MASTER_IP MASTER_PORT=$MASTER_PORT \
