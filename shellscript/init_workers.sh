@@ -14,7 +14,7 @@ WORKER_PORT=50051
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.."; pwd)"
 
 # JAR 절대경로
-JAR_PATH="$REPO_ROOT/worker/target/scala-2.13/worker_2.13-0.1.0-SNAPSHOT.jar"
+JAR_PATH="$REPO_ROOT/worker/target/scala-2.13/worker-assembly.jar"
 REMOTE_JAR_NAME="worker.jar"
 
 # JAR 존재 확인
