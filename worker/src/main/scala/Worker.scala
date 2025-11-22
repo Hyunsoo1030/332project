@@ -17,14 +17,14 @@ import com.google.protobuf.ByteString
 
 object Worker extends App {
 
-  // val masterIp    = sys.env("MASTER_IP")
-  // val masterPort  = sys.env("MASTER_PORT").toInt
-  // val workerIp      = sys.env("WORKER_IP")
-  // val workerPort  = sys.env("WORKER_PORT").toInt
-  val masterIp = "localhost"  // 로컬 테스트용 마스터 host
-  val masterPort = 9000         // 로컬 테스트용 마스터 port
-  val workerIp = "localhost"
-  val workerPort = 7777
+   val masterIp    = sys.env("MASTER_IP")
+   val masterPort  = sys.env("MASTER_PORT").toInt
+   val workerIp      = sys.env("WORKER_IP")
+   val workerPort  = sys.env("WORKER_PORT").toInt
+//  val masterIp = "localhost"  // 로컬 테스트용 마스터 host
+//  val masterPort = 9000         // 로컬 테스트용 마스터 port
+//  val workerIp = "localhost"
+//  val workerPort = 7777
 
   val channelToMaster =
     ManagedChannelBuilder
