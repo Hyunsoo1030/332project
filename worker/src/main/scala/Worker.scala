@@ -77,20 +77,59 @@ class WorkerServiceImpl(dataPath: String           // worker 로컬 데이터 �
   private val SampleBytes: Long = 1024L * 1024L // 1MB
 
   /** 디스크에서 1MB만 읽어서 Pivots로 리턴 */
+//  override def getSamples(req: SampleRequest): Future[Pivots] = Future {
+//    val path = Paths.get(dataPath)
+//    val fileSize = Files.size(path)
+//
+//    val buf = new Array[Byte](SampleBytes.toInt)
+//    val raf = new RandomAccessFile(path.toFile, "r")
+//    try {
+//      raf.readFully(buf)
+//    } finally raf.close()
+//
+//    // 예시: Pivots 안에 bytes data = 1; 같은 필드가 있다고 가정
+//    Pivots(
+//    )
+//  }
+
   override def getSamples(req: SampleRequest): Future[Pivots] = Future {
-    val path = Paths.get(dataPath)
-    val fileSize = Files.size(path)
+    println(s"[WORKER] getSamples called. dataPath=$dataPath")
 
-    val buf = new Array[Byte](SampleBytes.toInt)
-    val raf = new RandomAccessFile(path.toFile, "r")
     try {
-      raf.readFully(buf)
-    } finally raf.close()
+      val path = Paths.get(dataPath)
 
-    // 예시: Pivots 안에 bytes data = 1; 같은 필드가 있다고 가정
-    Pivots(
-    )
+      if (!Files.exists(path)) {
+        println(s"[WORKER] ERROR: data file not found: $dataPath")
+        return Pivots()
+      }
+      if (!Files.isRegularFile(path)) {
+        println(s"[WORKER] ERROR: dataPath is not a file: $dataPath")
+        return Pivots()
+      }
+
+      val fileSize = Files.size(path)
+      println(s"[WORKER] fileSize = $fileSize bytes")
+
+      val toRead: Int = math.min(fileSize, SampleBytes).toInt   // SampleBytes = 1MB
+      val buf = new Array[Byte](toRead)
+
+      val raf = new RandomAccessFile(path.toFile, "r")
+      try {
+        raf.readFully(buf, 0, toRead)
+      } finally raf.close()
+
+      println(s"[WORKER] read $toRead bytes successfully.")
+
+      // TODO: buf를 써서 pivots 계산
+      Pivots()
+    } catch {
+      case e: Throwable =>
+        println(s"[WORKER] EXCEPTION in getSamples: ${e.getClass.getName}: ${e.getMessage}")
+        e.printStackTrace()
+        Pivots()
+    }
   }
+
 
   // 나머지 RPC들은 일단 TODO로 두거나 구현해 둔다
   override def startShuffle(req: ShuffleRequest): Future[ShuffleResponse] =
