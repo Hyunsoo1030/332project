@@ -24,10 +24,10 @@ object Master extends App {
       .start()
 
   println(s"[MASTER] gRPC server started, listening on $port")
-//  sys.addShutdownHook {
-//    println("[MASTER] Shutting down gRPC server...")
-//    server.shutdown()
-//  }
+  sys.addShutdownHook {
+    println("[MASTER] Shutting down gRPC server...")
+    server.shutdown()
+  }
 
   println("Press ENTER to terminate master server.")
   StdIn.readLine()
