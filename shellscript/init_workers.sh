@@ -14,7 +14,7 @@ WORKER_PORT=50051
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.."; pwd)"
 
 # JAR 절대경로
-JAR_PATH="$REPO_ROOT/worker/target/scala-2.13/worker_2.13-0.1.0-SNAPSHOT.jar"
+JAR_PATH="$REPO_ROOT/worker/target/scala-2.13/worker-assembly.jar"
 REMOTE_JAR_NAME="worker.jar"
 
 # JAR 존재 확인
@@ -30,12 +30,9 @@ for i in $(seq 101 120); do
   # 1) JAR 복사
   scp "$JAR_PATH" navy@$IP:~/$REMOTE_JAR_NAME
 
-  sbt "master/run"
-
   # 2) 원격에서 워커 실행
   ssh navy@$IP \
     "MASTER_IP=$MASTER_IP MASTER_PORT=$MASTER_PORT \
      WORKER_IP=$IP WORKER_PORT=$WORKER_PORT \
      nohup java -jar ~/$REMOTE_JAR_NAME > worker.log 2>&1 &"
 done
-
