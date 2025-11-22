@@ -26,6 +26,18 @@ object Worker extends App {
 //  val workerIp = "localhost"
 //  val workerPort = 7777
 
+  val dataPath    = sys.env("DATA_PATH")
+
+  val workerService = new WorkerServiceImpl(dataPath)
+  val workerServer =
+    io.grpc.ServerBuilder
+      .forPort(workerPort)
+      .addService(WorkerServiceGrpc.bindService(workerService, ec))
+      .build()
+      .start()
+
+  println(s"[WORKER] WorkerService started. dataPath=$dataPath")
+
   val channelToMaster =
     ManagedChannelBuilder
       .forAddress(masterIp, masterPort)
@@ -52,6 +64,8 @@ object Worker extends App {
   println("[WORKER] RPC finished successfully.")
 
   channelToMaster.shutdownNow()
+
+  workerServer.awaitTermination()
 }
 
 class WorkerServiceImpl(dataPath: String           // worker 로컬 데이터 파일 경로
