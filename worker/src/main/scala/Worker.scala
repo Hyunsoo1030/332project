@@ -6,7 +6,7 @@ import scala.concurrent.{Await, Future}
 import scala.concurrent.{ExecutionContext, Future}
 
 import proto.common._                  // WorkerData, WorkerDataResponse 등
-import proto.common.MasterServiceGrpc  // gRPC 서비스 바인딩
+import proto.common.MasterServiceGrpc
 import proto.common.WorkerServiceGrpc
 
 import java.nio.file.{Files, Paths}
