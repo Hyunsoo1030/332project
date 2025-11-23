@@ -31,15 +31,15 @@
     export LANG=C
     ```
     
-    ![/image/init_worker.png]
+    ![image.png](image/init_worker.png)
     
     - run_worekers.sh를 실행하다가 문제가 발생했다. vm에 `worker.jar` 파일까지는 잘 보내놨는데 run_worers.sh를 실행하니까 마스터와 워커 사이의 통신이 잘 안됐다. 그래서 플러그인이랑 뭘 좀 수정해서 sbt clean을 했는데 에러가 떴다. 맨 처음에 sbt clean 정도를 빌드 파일을 미는 커맨드 정도로 생각했었는데, 에러가 뜨는게 이상해서 찾아보니까 sbt에서는 로드가 제대로 되지 않으면 clean도 안된다고 한다. 여기거 우리가 사용하기로 한 플러그인이나 빌드 파일을 검토하고 clean한다는 것이다.
     
     1. `init_workers.sh`를 실행시켜서 마스터에 각각 워커 노드들이 등록을 마치게끔 하였다.
         
-        ![Screenshot 2025-11-20 at 2.46.20 AM.png](%F0%9F%97%93%20%ED%8C%80%ED%94%84%EB%A1%9C%EC%A0%9D%ED%8A%B8%20%ED%9A%8C%EC%9D%98%20%EA%B8%B0%EB%A1%9D%20(6%EC%A3%BC%EC%B0%A8-2)/Screenshot_2025-11-20_at_2.46.20_AM.png)
+        ![image.png](image/registration.png)
         
-        ![Screenshot 2025-11-20 at 2.47.12 AM.png](%F0%9F%97%93%20%ED%8C%80%ED%94%84%EB%A1%9C%EC%A0%9D%ED%8A%B8%20%ED%9A%8C%EC%9D%98%20%EA%B8%B0%EB%A1%9D%20(6%EC%A3%BC%EC%B0%A8-2)/Screenshot_2025-11-20_at_2.47.12_AM.png)
+        ![image.png](image/worker_log.png)
         
 - 준엽
     - [ ]  worker 기능 구현
@@ -59,7 +59,7 @@
 - 민혁: 시간이 부족하고 협업—특히 업무 공유—가 잘 안 되는 것 같음, 본인 역할이 불분명
     - docker 환경 구축은 뒤로 미루기 - 목적상 이상적인 test환경을 구축하는 것인데, 시간 상 우선순위를 낮게 둬도 크게 문제 없을 것 같음
     
-    ![image.png](%F0%9F%97%93%20%ED%8C%80%ED%94%84%EB%A1%9C%EC%A0%9D%ED%8A%B8%20%ED%9A%8C%EC%9D%98%20%EA%B8%B0%EB%A1%9D%20(6%EC%A3%BC%EC%B0%A8-2)/image.png)
+    ![image.png](image/gpt.png)
     
     - git push 자주 하기 - 각자 branch 만들어서 하면 예전 버전으로 복구도 간편하고 업무 공유 최신화에 유리
     - 일주일 단위로 마일스톤을 정하지 말고, 좀 더 구체적으로 정할 필요가 있음
