@@ -6,50 +6,58 @@ service MasterService {
   rpc registerWorker(WorkerData) returns (WorkerDataResponse);
 }
 
-service WorkerService {
-  rpc GetSamples (SampleRequest) returns (Pivots);
-  rpc StartShuffle (ShuffleRequest) returns (ShuffleResponse);
-  rpc SendData (DataRequest) returns (DataResponse);
-  rpc StartMerge (MergeRequest) returns (MergeResponse);
-}
-
+// rpc registerWorker(WorkerData) returns (WorkerDataResponse);
 message WorkerData {
-  int64 fileSize = 1;
-  string workerHost = 2;
-  int32 workerPort = 3;
+  string workerHost = 1;
+  int32 workerPort = 2;
 }
 message WorkerDataResponse {}
 
-
-message Entity {
-  string head = 1;
-  string body = 2;
+service WorkerService {
+  rpc shutdown (ShutdownRequest) returns (ShutdownResponse);  //워커 원격 종료 명령
+  rpc getSamples (SampleRequest) returns (SampleResponse);
+  rpc sendPivots (PivotRequest) returns (PivotResponse);
+  rpc startShuffle (ShuffleRequest) returns (ShuffleResponse);
+  rpc sendData (DataRequest) returns (DataResponse);
+  rpc startMerge (MergeRequest) returns (MergeResponse);
 }
 
-message Pivots {
+// rpc shutdown (ShutdownRequest) returns (ShutdownResponse);
+message ShutdownRequest {}
+message ShutdownResponse {}
+
+// rpc getSamples (SampleRequest) returns (SampleResponse);
+message SampleRequest {
+  int32 offset = 1;
+}
+message SampleResponse {
+  repeated string samples = 1;
+}
+
+// rpc sendPivots (PivotRequest) returns (PivotResponse);
+message PivotRequest {
   repeated string pivots = 1;
 }
+message PivotResponse {}
+
 
 message Address {
   string ip = 1;
   int32 port = 2;
 }
 
-message SampleRequest {
-  int32 offset = 1;
-}
-
-message SampleResponse {
-  repeated string pivots = 1;
-}
-
 message ShuffleRequest {
-  Pivots pivots = 1;
-  repeated Address workerAddresses = 2;
-  int32 workerNumber = 3;
+  repeated Address workerAddresses = 1;
+  int32 workerNumber = 2;
 }
 
 message ShuffleResponse {}
+
+
+message Entity {
+  string head = 1;
+  string body = 2;
+}
 
 message DataRequest {
   int32 workerNumber = 1;
