@@ -3,7 +3,15 @@ syntax = "proto3";
 package proto;
 
 service MasterService {
+  rpc getNewPort(PortRequest) returns (PortResponse);
   rpc registerWorker(WorkerData) returns (WorkerDataResponse);
+  rpc notifyConnection (ConnectionRequest) returns (ConnectionResponse);
+}
+
+// rpc getNewPort(PortRequest) returns (PortResponse);
+message PortRequest {}
+message PortResponse {
+  int32 portNum = 1;
 }
 
 // rpc registerWorker(WorkerData) returns (WorkerDataResponse);
@@ -17,6 +25,7 @@ service WorkerService {
   rpc shutdown (ShutdownRequest) returns (ShutdownResponse);  //워커 원격 종료 명령
   rpc getSamples (SampleRequest) returns (SampleResponse);
   rpc sendPivots (PivotRequest) returns (PivotResponse);
+  rpc notifyConnection (ConnectionRequest) returns (ConnectionResponse);
   rpc startShuffle (ShuffleRequest) returns (ShuffleResponse);
   rpc sendData (DataRequest) returns (DataResponse);
   rpc startMerge (MergeRequest) returns (MergeResponse);
@@ -35,11 +44,24 @@ message SampleResponse {
 }
 
 // rpc sendPivots (PivotRequest) returns (PivotResponse);
+message OrderedWorkerData {
+  int32 order = 1;
+  string workerHost = 2;
+  int32 workerPort = 3;
+}
 message PivotRequest {
   repeated string pivots = 1;
+  int32 myOrder = 2;
+  repeated OrderedWorkerData orderedWorkerData = 3;
 }
 message PivotResponse {}
 
+// rpc notifyConnection (ConnectionRequest) returns (ConnectionResponse);
+message ConnectionRequest {
+  string host = 1;
+  int32 port = 2;
+}
+message ConnectionResponse {}
 
 message Address {
   string ip = 1;
