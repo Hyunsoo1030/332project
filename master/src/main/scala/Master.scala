@@ -181,7 +181,7 @@ object Master extends App {
 class MasterServiceImpl(implicit ec: ExecutionContext)
   extends MasterServiceGrpc.MasterService {
 
-  private var nextPort: Int = 50509
+  private var nextPort: Int = 50500
 
   override def getNewPort(req: PortRequest): Future[PortResponse] = Future {
     val p = this.synchronized {
