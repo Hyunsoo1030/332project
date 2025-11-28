@@ -1,125 +1,280 @@
 package worker
 
-import io.grpc.ManagedChannelBuilder
-import scala.concurrent.duration._
-import scala.concurrent.{Await, Future}
+import io.grpc.{ManagedChannelBuilder, Server, ServerBuilder}
 
-import proto.common._                  // WorkerData, WorkerDataResponse 등
-import proto.common.MasterServiceGrpc  // gRPC 서비스 바인딩
+import scala.concurrent.{Await, ExecutionContext, Future}
+import proto.common._
+import proto.common.{MasterServiceGrpc, WorkerServiceGrpc}
 
-import java.net.InetAddress
-import scala.io.Source
-import java.io.{File, PrintWriter, FileWriter, BufferedWriter}
+import java.nio.file.{Files, Path, Paths}
+import java.io.RandomAccessFile
+import java.nio.charset.StandardCharsets
+import scala.jdk.CollectionConverters._
+import scala.util.Random
+import proto.common.WorkerServiceGrpc.WorkerServiceStub
+
+import java.net.{Inet4Address, NetworkInterface}
+import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
+import scala.concurrent.duration.DurationInt
+
 
 object Worker extends App {
+  // 입력 요구 사항
+  if (args.length < 4) {
+    System.err.println("Usage: worker <masterIp:port> -I <inDir>... -O <outDir>")
+    sys.exit(1)
+  }
 
-  val masterIp    = sys.env("MASTER_IP")
-  val masterPort  = sys.env("MASTER_PORT").toInt
-  val workerIp      = sys.env("WORKER_IP")
-  val workerPort  = sys.env("WORKER_PORT").toInt
-  //val masterIp = "localhost"  // 로컬 테스트용 마스터 host
-  //val masterPort = 9000         // 로컬 테스트용 마스터 port
+  // 1) 마스터 주소
+  val masterAddr = args(0)
+  val Array(masterHost, masterPortStr) =
+    masterAddr.split(":", 2) match {
+      case Array(h, p) => Array(h, p)
+      case _ =>
+        System.err.println("master address must be <host>:<port>")
+        sys.exit(1)
+    }
+  val masterPort = masterPortStr.toInt
+
+  // 2) -I 뒤의 input dirs (가변 개수)
+  var idx = 1
+  if (idx >= args.length || args(idx) != "-I") {
+    System.err.println("Usage: worker <masterIp:port> -I <inDir>... -O <outDir>")
+    sys.exit(1)
+  }
+  idx += 1
+
+  import scala.collection.mutable.ListBuffer
+  val inputDirs = ListBuffer.empty[String]
+
+  // -O 나오기 전까지 전부 input dir
+  while (idx < args.length && args(idx) != "-O") {
+    inputDirs += args(idx)
+    idx += 1
+  }
+
+  if (inputDirs.isEmpty) {
+    System.err.println("At least one input directory is required after -I")
+    sys.exit(1)
+  }
+
+  // 3) -O <outputDir> (무조건 하나)
+  if (idx >= args.length || args(idx) != "-O" || idx + 1 >= args.length) {
+    System.err.println("Usage: worker <masterIp:port> -I <inDir>... -O <outDir>")
+    sys.exit(1)
+  }
+  val outputDir = args(idx + 1)
+
+  implicit val ec: ExecutionContext = ExecutionContext.global
+
+  /*로컬 파워셸 테스트용
+  $env:MASTER_IP="localhost"
+  $env:MASTER_PORT="8915"
+  $env:WORKER_IP="localhost"
+  $env:WORKER_PORT="8888"
+  $env:DATA_PATH="C:\Users\matth\Desktop\cs332Project\332project\input"
+  sbt worker/run
+  sbt "worker/run localhost:8915 -I C:\Users\matth\Desktop\cs332Project\332project\test_input1 C:\Users\matth\Desktop\cs332Project\332project\test_input2 -O C:\Users\matth\Desktop\cs332Project\332project\test_output"
+  */
+  case class WorkerEntry
+  (
+    host: String,
+    port: Int,
+    order: Int,
+    channel: io.grpc.ManagedChannel,
+    stub: WorkerServiceStub
+  )
+
+  val workers: mutable.ListBuffer[WorkerEntry]
+  = mutable.ListBuffer.empty[WorkerEntry]
+  var pivotsList: List[String] = Nil
+  var myOrder: Int = -1
+
+  println(s"[WORKER] Connecting to master at $masterHost:$masterPort ...")
 
   val channelToMaster =
     ManagedChannelBuilder
-      .forAddress(masterIp, masterPort)
+      .forAddress(masterHost, masterPort)
       .usePlaintext() // TLS 안 씀
       .build()
 
-  val stub: MasterServiceGrpc.MasterServiceStub =
+  val masterStub: MasterServiceGrpc.MasterServiceStub =
     MasterServiceGrpc.stub(channelToMaster)
 
-  println(s"[WORKER] Connecting to master at $masterIp:$masterPort ...")
+  //val masterIp    = sys.env("MASTER_IP")
+  //val masterPort  = sys.env("MASTER_PORT").toInt
+  //val dataPath    = sys.env("DATA_PATH")
 
-  val request = WorkerData(
-    fileSize = 123456L,
-    workerHost = workerIp,
-    workerPort = workerPort
-  )
+  val workerHost    = findMyIp()
+
+  val portF: Future[PortResponse] = masterStub.getNewPort(PortRequest())
+  val portResp: PortResponse = Await.result(portF, 10.seconds)
+  val workerPort = portResp.portNum
+
+  val server: Server =  //본인 서버 구축
+    ServerBuilder
+      .forPort(workerPort)
+      .addService(WorkerServiceGrpc.bindService(new WorkerServiceImpl(inputDirs), ec))
+      .build()
+      .start()
+
+  println(s"[WORKER] gRPC server started, listening on $workerHost:$workerPort")
+
+  masterStub.notifyConnection(ConnectionRequest(host=workerHost, port=workerPort))
 
   println("[WORKER] Registering with registerWorker RPC...")
-  val responseF: Future[WorkerDataResponse] =
-    stub.registerWorker(request)
 
-  Await.result(responseF, 5.seconds)
+  val registerResponseF: Future[WorkerDataResponse] =
+   masterStub.registerWorker(WorkerData(workerHost=workerHost, workerPort=workerPort))
 
-  println("[WORKER] RPC finished successfully.")
+  registerResponseF.onComplete(_ -> {println("[WORKER] Registration completed.")})
+  server.awaitTermination()
 
-  channelToMaster.shutdownNow()
 
-  /* worker 기본 기능 구현 */
+  def findMyIp(): String = {
+    val nets = NetworkInterface.getNetworkInterfaces.asScala.toList
 
-  /* Sort */
+    val addrs =
+      for {
+        net <- nets
+        if net.isUp && !net.isLoopback && !net.isVirtual
+        addr <- net.getInetAddresses.asScala
+        if addr.isInstanceOf[Inet4Address]
+      } yield addr.getHostAddress
 
-  // 1. 자기 자신의 IP 출력
-  val ipAddress = InetAddress.getLocalHost.getHostAddress
-  println(s"My IP: $ipAddress")
-
-  val inputFile = "testinput"
-
-  // 2. 첫 10줄 데이터 출력
-  println("First 10 lines of testinput:")
-  Source.fromFile(inputFile).getLines().take(10).foreach(println)
-
-  val totalLines = 1000 // 충분히 클 경우: Source.fromFile(inputFile).getLines().length 등 사용 가능
-
-  // 3~5. 커서로 100줄씩 읽어가며, 10번 반복 (1000줄 존재한다고 가정. 부족하면 끝까지)
-  val chunkSize = 100
-  var lineCursor = 0
-  val lines = Source.fromFile(inputFile).getLines().toArray
-  val output1Pw = new BufferedWriter(new FileWriter("testoutput_1")) // 누적 추가 쓰기
-  val output2Pw = new BufferedWriter(new FileWriter("testoutput_2"))
-
-  for (_ <- 1 to 10 if lineCursor < lines.length) {
-    val chunk = lines.slice(lineCursor, Math.min(lineCursor + chunkSize, lines.length))
-    val records = chunk.map { line =>
-      if (line.length >= 100) (line.substring(0, 10), line.substring(10, 100))
-      else (line.substring(0, Math.min(line.length, 10)), if (line.length > 10) line.substring(10) else "")
-    }
-    // 4. key 기준 정렬
-    val sortedRecords = records.sortBy(_._1)
-    // 5. "a000000000" 기준 분리
-    val (file1, file2) = sortedRecords.partition(_._1 <= "a000000000")
-
-    // 결과 파일에: 개수 + 데이터 누적 작성 (append)
-    output1Pw.write(file1.length.toString + "\n")
-    file1.foreach { case (k, v) => output1Pw.write(k + v + "\n") }
-
-    output2Pw.write(file2.length.toString + "\n")
-    file2.foreach { case (k, v) => output2Pw.write(k + v + "\n") }
-
-    lineCursor += chunkSize
+    addrs.headOption.getOrElse("127.0.0.1")
   }
+}
 
-  output1Pw.close()
-  output2Pw.close()
+class WorkerServiceImpl(inputDirs: ListBuffer[String]           // worker 로컬 데이터 파일 경로
+                       )(implicit ec: ExecutionContext)
+  extends WorkerServiceGrpc.WorkerService {
 
-  /* Merge */
+  private val sampleBytes: Long = 1024L * 1024L // 1MB
 
-  val mergedRecords = scala.collection.mutable.ListBuffer[(String, String)]()
-  val src = Source.fromFile("testoutput_2")
-  val iter = src.getLines()
+  override def shutdown(req: ShutdownRequest): Future[ShutdownResponse] = Future {
+    println("[WORKER] Shutdown RPC received.")
+    // 응답 객체
+    ShutdownResponse()
+  }.andThen { case _ =>
+    Worker.server.shutdown()
+    new Thread(() => System.exit(0)).start()}
 
-  // testoutput_1에서 개수, 데이터 반복 파싱
-  while (iter.hasNext) {
-    val countLine = iter.next()
-    val count = countLine.toInt
-    for (_ <- 1 to count if iter.hasNext) {
-      val line = iter.next()
-      if (line.length >= 10) {
-        mergedRecords += ((line.substring(0,10), line.substring(10)))
+  /** 디스크에서 1MB만 읽어서 Samples로 리턴 */
+  override def getSamples(req: SampleRequest): Future[SampleResponse] = Future {
+    println("[WORKER] getSamples called.")
+
+    val RecordSize  = 100
+    val KeySize     = 10
+
+    // 0) inputDirs를 Path로 변환
+    val dirPaths: ListBuffer[Path] = inputDirs.map(Paths.get(_)).to(ListBuffer)
+
+    // 1) 모든 디렉토리에서 일반 파일만 모으기
+    val files: Vector[Path] =
+      dirPaths.flatMap { dir =>
+        if (Files.exists(dir) && Files.isDirectory(dir)) {
+          Files.list(dir).iterator().asScala
+            .filter(p => Files.isRegularFile(p))
+            .toVector
+        } else {
+          Vector.empty[Path]
+        }
+      }.toVector
+
+    if (files.isEmpty) {
+      println(s"[WORKER] inputDirs have no regular files: ${inputDirs.mkString(", ")}")
+      SampleResponse(samples = Seq.empty)
+    } else if (sampleBytes <= 0) {
+      SampleResponse(samples = Seq.empty)
+    } else {
+      val numFiles = files.size
+      val bytesPerFile: Long = sampleBytes / numFiles
+
+      if (bytesPerFile < RecordSize) {
+        println(s"[WORKER] bytesPerFile=$bytesPerFile < RecordSize; no samples.")
+        SampleResponse(samples = Seq.empty)
       } else {
-        mergedRecords += ((line, ""))
+        val rnd = new Random()
+        val samplesBuilder = Vector.newBuilder[String]
+
+        files.foreach { file =>
+          val fileSize = Files.size(file)
+          if (fileSize >= RecordSize) {
+            val usableBytes = math.min(bytesPerFile, fileSize)
+            val numSamples  = (usableBytes / RecordSize).toInt
+
+            if (numSamples > 0) {
+              val maxOffset = fileSize - RecordSize
+
+              val raf = new RandomAccessFile(file.toFile, "r")
+              try {
+                var i = 0
+                while (i < numSamples) {
+                  val rawOffset = math.abs(rnd.nextLong()) % (maxOffset + 1)
+                  val alignedOffset = rawOffset - (rawOffset % RecordSize)
+
+                  val buf = new Array[Byte](RecordSize)
+                  raf.seek(alignedOffset)
+                  raf.readFully(buf)
+
+                  val keyBytes = java.util.Arrays.copyOfRange(buf, 0, KeySize)
+                  val keyStr   = new String(keyBytes, StandardCharsets.ISO_8859_1)
+                  samplesBuilder += keyStr
+
+                  i += 1
+                }
+              } finally {
+                raf.close()
+              }
+            }
+          }
+        }
+
+        SampleResponse(samples = samplesBuilder.result())
       }
     }
   }
-  src.close()
 
-  // key 기준 전체 정렬
-  val sortedRecords = mergedRecords.sortBy(_._1)
+  override def sendPivots(req: PivotRequest): Future[PivotResponse] = Future {
+    println("[WORKER] sendPivots called.") // TODO: 워커들 간 채널 구축하고 저장하기 - 본인 채널 안 열게 조심
+    Worker.pivotsList = req.pivots.toList
+    Worker.myOrder = req.myOrder
+    var workerCount = 1
 
-  // testoutput_final에 기록
-  val pw = new PrintWriter(new File("testoutput_final"))
-  sortedRecords.foreach { case (k, v) => pw.println(k + v) }
-  pw.close()
+    println(s"[WORKER] Acquired pivots: ${Worker.pivotsList}")
+
+      req.orderedWorkerData.filterNot(w => w.workerHost == Worker.workerHost && w.workerPort == Worker.workerPort)
+      .foreach(w => {
+        val channel = ManagedChannelBuilder
+          .forAddress(w.workerHost, w.workerPort)
+          .usePlaintext()
+          .build()
+        val stub = WorkerServiceGrpc.stub(channel)
+        stub.notifyConnection(ConnectionRequest(host=Worker.workerHost, port=Worker.workerPort))
+        Worker.workers += Worker.WorkerEntry(w.workerHost, w.workerPort, w.order, channel, stub)
+        println(s"[WORKER] A channel with worker${w.order} registered at ${w.workerHost}:${w.workerPort}.")
+        workerCount += 1
+        if(workerCount == req.orderedWorkerData.length)
+          println("[WORKER] All workers are registered.")
+      })
+
+    PivotResponse()
+  }
+
+  override def notifyConnection(req: ConnectionRequest): Future[ConnectionResponse] = Future {
+    println(s"[WORKER] Connected from ${req.host}:${req.port}.")
+    ConnectionResponse()
+  }
+
+  // 나머지 RPC들은 일단 TODO로 두거나 구현해 둔다
+  override def startShuffle(req: ShuffleRequest): Future[ShuffleResponse] =
+    Future.successful(ShuffleResponse()) // TODO: 실제 구현
+
+  override def sendData(req: DataRequest): Future[DataResponse] =
+    Future.successful(DataResponse())    // TODO
+
+  override def startMerge(req: MergeRequest): Future[MergeResponse] =
+    Future.successful(MergeResponse())   // TODO
 }
