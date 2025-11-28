@@ -1,7 +1,8 @@
 import sbtassembly.MergeStrategy
 import sbtassembly.PathList
+import sbtprotoc.ProtocPlugin.autoImport.PB  // ★ ScalaPB 코드 생성용
 
-scalaVersion := "2.13.16"
+ThisBuild / scalaVersion := "2.13.16"
 
 val grpcVersion    = "1.62.2"
 val scalaPbVersion = "0.11.20"
@@ -12,31 +13,12 @@ lazy val sharedDependencies = Seq(
   "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalaPbVersion
 )
 
-lazy val commonAssemblySettings = Seq(
-  assembly / assemblyMergeStrategy := {
-    // 1) netty 버전 파일은 첫 번째 것만 사용
-    case PathList("META-INF", "io.netty.versions.properties") =>
-      MergeStrategy.first
-
-    // 2) ServiceLoader용 파일은 여러 JAR의 내용을 이어 붙여야 함
-    //    gRPC가 여기서 ManagedChannelProvider, NameResolverProvider 등을 찾음
-    case PathList("META-INF", "services", xs @ _*) =>
-      MergeStrategy.concat
-
-    // 3) 그 외 META-INF 잡다한 것들은 버려도 됨 (라이선스, 서명 등)
-    case PathList("META-INF", xs @ _*) =>
-      MergeStrategy.discard
-
-    // 4) 나머지는 기본적으로 첫 번째 것을 사용
-    case _ =>
-      MergeStrategy.first
-  }
-)
-
-// A. common: proto + 코드 생성
-lazy val common = project.in(file("common"))
+// ------------------------------------------------------------
+// A. common: proto + 코드 생성 (★ 다시 추가된 부분)
+// ------------------------------------------------------------
+lazy val common = (project in file("common"))
   .settings(
-    scalaVersion := "2.13.16",
+    name := "common",
     libraryDependencies ++= sharedDependencies,
     // ScalaPB 코드 생성
     Compile / PB.targets := Seq(
@@ -44,32 +26,55 @@ lazy val common = project.in(file("common"))
     )
   )
 
-// B. master: gRPC 서버
-lazy val master = project.in(file("master"))
-  .dependsOn(common)
-  .settings(
-    scalaVersion := "2.13.16",
-    libraryDependencies ++= sharedDependencies,
-    Compile / unmanagedSourceDirectories +=
-      (common / Compile / sourceManaged).value // (옵션) common 생성 소스를 직접 참조하고 싶다면
-  )
+// 공통 merge 전략 (master/worker 둘 다에서 사용)
+lazy val commonMergeStrategy: String => MergeStrategy = {
+  case PathList("META-INF", "io.netty.versions.properties") =>
+    MergeStrategy.first
+  case PathList("META-INF", "services", _ @ _*) =>
+    MergeStrategy.concat
+  case x if x.endsWith(".proto") =>
+    MergeStrategy.first
+  case PathList("META-INF", _ @ _*) =>
+    MergeStrategy.discard
+  case _ =>
+    MergeStrategy.first
+}
 
-// C. worker: gRPC 클라이언트
-lazy val worker = project.in(file("worker"))
-  .dependsOn(common)
+// ------------------------------------------------------------
+// master 모듈
+// ------------------------------------------------------------
+lazy val master = (project in file("master"))
+  .dependsOn(common)                              // ★ common 의존
   .settings(
-    scalaVersion := "2.13.16",
+    name := "master",
     libraryDependencies ++= sharedDependencies,
-    Compile / unmanagedSourceDirectories +=
-      (common / Compile / sourceManaged).value,
-    assembly / mainClass := Some("worker.Worker"),      // 실제 main object
-    assembly / assemblyJarName := "worker-assembly.jar"
+    Compile / mainClass := Some("master.Master"), // 네 Master 오브젝트 FQCN
+    assembly / assemblyJarName := "master.jar",
+    assembly / assemblyMergeStrategy := commonMergeStrategy
   )
-  .settings(commonAssemblySettings: _*)
+  .enablePlugins(sbtassembly.AssemblyPlugin)
 
-// D. root: aggregator
-lazy val root = project.in(file("."))
+
+// ------------------------------------------------------------
+// worker 모듈
+// ------------------------------------------------------------
+lazy val worker = (project in file("worker"))
+  .dependsOn(common)                              // ★ common 의존
+  .settings(
+    name := "worker",
+    libraryDependencies ++= sharedDependencies,
+    Compile / mainClass := Some("worker.Worker"), // 네 Worker 오브젝트 FQCN
+    assembly / assemblyJarName := "worker.jar",
+    assembly / assemblyMergeStrategy := commonMergeStrategy
+  )
+  .enablePlugins(sbtassembly.AssemblyPlugin)
+
+
+// ------------------------------------------------------------
+// root (aggregate용)
+// ------------------------------------------------------------
+lazy val root = (project in file("."))
   .aggregate(common, master, worker)
   .settings(
-    publish := {}
+    publish / skip := true
   )
