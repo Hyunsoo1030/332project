@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# 사용법: worker <#workers>
+
+exec java -jar C:/Users/matth/Desktop/cs332Project/332project/worker\target/scala-2.13/worker.jar "$@"
