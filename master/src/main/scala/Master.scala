@@ -61,7 +61,7 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
     val workerStub = WorkerServiceGrpc.stub(channel)
 
     // 현재 SampleRequest 안에 필드가 없다고 가정
-    val sampleReq = SampleRequest()   // or SampleRequest.defaultInstance
+    val sampleReq = SampleRequest(0)   // or SampleRequest.defaultInstance
 
     val samplesF: Future[Pivots] = workerStub.getSamples(sampleReq)
 

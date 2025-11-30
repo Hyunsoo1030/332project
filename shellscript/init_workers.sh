@@ -65,4 +65,3 @@ for i in $(seq 101 120); do
      WORKER_IP=$IP WORKER_PORT=$WORKER_PORT \
      nohup java -jar ~/$REMOTE_JAR_NAME > worker.log 2>&1 &"
 done
-

@@ -6,7 +6,7 @@ import scala.concurrent.{Await, Future}
 import scala.concurrent.{ExecutionContext, Future}
 
 import proto.common._                  // WorkerData, WorkerDataResponse 등
-import proto.common.MasterServiceGrpc  // gRPC 서비스 바인딩
+import proto.common.MasterServiceGrpc
 import proto.common.WorkerServiceGrpc
 
 import java.nio.file.{Files, Paths}
@@ -16,15 +16,28 @@ import com.google.protobuf.ByteString
 
 
 object Worker extends App {
+   implicit val ec: ExecutionContext = ExecutionContext.global
 
-  val masterIp    = sys.env("MASTER_IP")
-  val masterPort  = sys.env("MASTER_PORT").toInt
-  val workerIp      = sys.env("WORKER_IP")
-  val workerPort  = sys.env("WORKER_PORT").toInt
-  // val masterIp = "localhost"  // 로컬 테스트용 마스터 host
-  // val masterPort = 9000         // 로컬 테스트용 마스터 port
-  // val workerIp = "localhost"
-  // val workerPort = 7777
+   val masterIp    = sys.env("MASTER_IP")
+   val masterPort  = sys.env("MASTER_PORT").toInt
+   val workerIp      = sys.env("WORKER_IP")
+   val workerPort  = sys.env("WORKER_PORT").toInt
+//  val masterIp = "localhost"  // 로컬 테스트용 마스터 host
+//  val masterPort = 9000         // 로컬 테스트용 마스터 port
+//  val workerIp = "localhost"
+//  val workerPort = 7777
+
+  val dataPath    = sys.env("DATA_PATH")
+
+  val workerService = new WorkerServiceImpl(dataPath)
+  val workerServer =
+    io.grpc.ServerBuilder
+      .forPort(workerPort)
+      .addService(WorkerServiceGrpc.bindService(workerService, ec))
+      .build()
+      .start()
+
+  println(s"[WORKER] WorkerService started. dataPath=$dataPath")
 
   val channelToMaster =
     ManagedChannelBuilder
@@ -52,6 +65,8 @@ object Worker extends App {
   println("[WORKER] RPC finished successfully.")
 
   channelToMaster.shutdownNow()
+
+  workerServer.awaitTermination()
 }
 
 class WorkerServiceImpl(dataPath: String           // worker 로컬 데이터 파일 경로
@@ -61,20 +76,57 @@ class WorkerServiceImpl(dataPath: String           // worker 로컬 데이터 �
   private val SampleBytes: Long = 1024L * 1024L // 1MB
 
   /** 디스크에서 1MB만 읽어서 Pivots로 리턴 */
-  override def getSamples(req: SampleRequest): Future[Pivots] = Future {
-    val path = Paths.get(dataPath)
-    val fileSize = Files.size(path)
+//  override def getSamples(req: SampleRequest): Future[Pivots] = Future {
+//    val path = Paths.get(dataPath)
+//    val fileSize = Files.size(path)
+//
+//    val buf = new Array[Byte](SampleBytes.toInt)
+//    val raf = new RandomAccessFile(path.toFile, "r")
+//    try {
+//      raf.readFully(buf)
+//    } finally raf.close()
+//
+//    // 예시: Pivots 안에 bytes data = 1; 같은 필드가 있다고 가정
+//    Pivots(
+//    )
+//  }
 
-    val buf = new Array[Byte](SampleBytes.toInt)
-    val raf = new RandomAccessFile(path.toFile, "r")
-    try {
-      raf.readFully(buf)
-    } finally raf.close()
+  override def getSamples(req: SampleRequest): Future[Pivots] = {
+    Future {
+      println("[WORKER] getSamples called.")
 
-    // 예시: Pivots 안에 bytes data = 1; 같은 필드가 있다고 가정
-    Pivots(
-    )
+      try {
+        val path = Paths.get(dataPath)
+
+        if (!Files.exists(path)) {
+          println(s"[WORKER] ERROR: file not found: $dataPath")
+          Pivots()
+        }
+        else if (!Files.isRegularFile(path)) {
+          println(s"[WORKER] ERROR: not a file: $dataPath")
+          Pivots()
+        }
+        else {
+          val fileSize = Files.size(path)
+          val toRead   = math.min(fileSize, SampleBytes).toInt
+          val buf      = new Array[Byte](toRead)
+
+          val raf = new RandomAccessFile(path.toFile, "r")
+          try raf.readFully(buf, 0, toRead)
+          finally raf.close()
+
+          println(s"[WORKER] read $toRead bytes successfully.")
+          Pivots()
+        }
+      } catch {
+        case e: Throwable =>
+          println(s"[WORKER] EXCEPTION in getSamples: ${e.getMessage}")
+          e.printStackTrace()
+          Pivots()
+      }
+    }
   }
+
 
   // 나머지 RPC들은 일단 TODO로 두거나 구현해 둔다
   override def startShuffle(req: ShuffleRequest): Future[ShuffleResponse] =
