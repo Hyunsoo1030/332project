@@ -29,11 +29,11 @@
     - 현수
 1. local에서 sampling phase 완료
 
-![sampling.png](/image/sampling.png)
+![sampling](image/sampling.png)
 
 1. local에서 sorting 완료
 
-![sort.png](/image/sort.png)
+![sort](image/sort.png)
 
 ---
 
