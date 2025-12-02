@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# 사용법: worker <masterIp:port> -I ... -O ...
+
+exec java -jar ~/worker.jar "$@"

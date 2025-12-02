@@ -1,0 +1,6 @@
+for i in $(seq 101 120); do
+  IP="2.2.2.$i"
+  ssh navy@$IP "rm -r bin_for_linux && rm -r input && rm -r output"
+  ssh navy@$IP "mkdir bin_for_linux"
+  scp ~/332project/bin_for_linux/worker navy@$IP:~/bin_for_linux
+done

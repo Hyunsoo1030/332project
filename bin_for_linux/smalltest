@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+export LC_ALL=C
+export LANG=C
+
+# JAR 절대경로
+JAR_PATH=~/332project/worker/target/scala-2.13/worker.jar
+REMOTE_JAR_NAME="worker.jar"
+
+# JAR 존재 확인
+if [[ ! -f "$JAR_PATH" ]]; then
+  echo "JAR not found: $JAR_PATH"
+  exit 1
+fi
+
+INPUT=$1
+
+echo "Do a smalltest with $1 workers"
+for i in $(seq 101 $((100 + INPUT))); do
+  IP="2.2.2.$i"
+  echo "=== Deploy to $IP ==="
+
+  # 1) JAR 복사
+  rsync -avzc "$JAR_PATH" navy@$IP:~/$REMOTE_JAR_NAME
+
+  # 2) Clean output directory
+  ssh navy@$IP "rm -rf ~/output && mkdir -p ~/output"
+
+  # 3)  testinput 초기화
+  ssh navy@$IP "rm -rf ~/testinput && cp -r /dataset/small ~/testinput"
+
+  # 4) 워커 실행
+  ssh navy@$IP "nohup ~/bin_for_linux/worker 2.2.2.254:8915 -I ~/testinput -O ~/output > ~/worker.log 2>&1 &"
+done

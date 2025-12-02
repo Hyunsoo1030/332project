@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# 사용법: master <#workers>
+
+exec java -jar ~/332project/master/target/scala-2.13/master.jar "$@"
