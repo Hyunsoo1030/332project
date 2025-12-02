@@ -10,7 +10,8 @@ import java.net._
 import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
-import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.io.StdIn
 import scala.util.{Failure, Success}
 
@@ -48,33 +49,49 @@ object Master extends App {
   val whenRegisterCompleted = Promise[Unit]()
   doSample()
 
+  // 플래그: 정상 종료 중인지 여부
+  @volatile var normalShutdownInProgress = false
+
   // 비상용 종료 플로우 - 서버만 종료
   sys.addShutdownHook {
-    println("[MASTER] Shutting down gRPC server...")
-    server.shutdown()
+    if (!normalShutdownInProgress) {
+      println("[MASTER] [EMERGENCY] Shutting down gRPC server only...")
+      server.shutdown()
+    } else {
+      // 정상 종료 중이면 훅에서는 아무것도 안 함
+      println("[MASTER] Normal shutdown in progress, skip shutdownHook server.shutdown()")
+    }
   }
 
-  // 정상 종료 플로우: ENTER 입력 → 워커들 종료 → 마스터 종료
+  // 정상 종료 플로우
   println("Press ENTER to terminate master server.")
   StdIn.readLine()
 
   println("[MASTER] Sending shutdown RPC to all workers...")
 
+  normalShutdownInProgress = true  // 정상 종료 시작 표시
+
   // 모든 워커에게 병렬로 Shutdown 보내기
   val shutdownFutures: List[Future[Unit]] =
     workers.map { w =>
       w.stub.shutdown(ShutdownRequest()).map { _ =>
-        println("[MASTER] Worker shutdown ACK received")
+        println(s"[MASTER] Worker shutdown ACK received from ${w.host}:${w.port}")
         ()
       }
     }.toList
 
+  // 전체 Future 완료를 기다리기 위한 Promise
+  val whenAllShutdownDone = Promise[Unit]()
+
   Future.sequence(shutdownFutures).onComplete { _ =>
     println("[MASTER] All shutdown RPCs completed. Stopping master gRPC server...")
-    Thread.sleep(500)       // 꼭 넣고 싶으면 유지
     server.shutdown()
     println("[MASTER] Master terminated.")
+    whenAllShutdownDone.trySuccess(())
   }
+
+  // 여기서 main 스레드가 끝까지 기다리게 함
+  Await.result(whenAllShutdownDone.future, Duration.Inf)
 
   def doSample(): Future[Unit] = Future {
     //sampling phase
