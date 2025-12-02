@@ -16,7 +16,7 @@ import proto.common.WorkerServiceGrpc.WorkerServiceStub
 import java.net.{Inet4Address, NetworkInterface}
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
-import scala.concurrent.duration.DurationInt
+import scala.concurrent.duration.{Duration, DurationInt}
 
 
 object Worker extends App {
@@ -109,7 +109,7 @@ object Worker extends App {
   val workerHost    = findMyIp()
 
   val portF: Future[PortResponse] = masterStub.getNewPort(PortRequest())
-  val portResp: PortResponse = Await.result(portF, 10.seconds)
+  val portResp: PortResponse = Await.result(portF, Duration.Inf)
   val workerPort = portResp.portNum
 
   val server: Server =  //본인 서버 구축
