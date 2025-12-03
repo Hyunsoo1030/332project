@@ -6,6 +6,7 @@ service MasterService {
   rpc getNewPort(PortRequest) returns (PortResponse);
   rpc registerWorker(WorkerData) returns (WorkerDataResponse);
   rpc notifyConnection (ConnectionRequest) returns (ConnectionResponse);
+  rpc readyToShuffle(ReadyRequest) returns (ReadyResponse);
 }
 
 // rpc getNewPort(PortRequest) returns (PortResponse);
@@ -20,6 +21,19 @@ message WorkerData {
   int32 workerPort = 2;
 }
 message WorkerDataResponse {}
+
+// rpc notifyConnection (ConnectionRequest) returns (ConnectionResponse);
+message ConnectionRequest {
+  string host = 1;
+  int32 port = 2;
+}
+message ConnectionResponse {}
+
+message ReadyRequest {
+  string host = 1;
+  int32 port = 2;
+}
+message ReadyResponse {}
 
 service WorkerService {
   rpc shutdown (ShutdownRequest) returns (ShutdownResponse);  //워커 원격 종료 명령
@@ -55,13 +69,6 @@ message PivotRequest {
   repeated OrderedWorkerData orderedWorkerData = 3;
 }
 message PivotResponse {}
-
-// rpc notifyConnection (ConnectionRequest) returns (ConnectionResponse);
-message ConnectionRequest {
-  string host = 1;
-  int32 port = 2;
-}
-message ConnectionResponse {}
 
 message Address {
   string ip = 1;
