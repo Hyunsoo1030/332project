@@ -1,8 +1,11 @@
+package worker
+
 import java.io._
 import java.util.concurrent.{ExecutorService, Executors, Semaphore}
+import java.nio.file.{Files, Paths, StandardOpenOption}
 
-import scala.collection.mutable
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.collection.mutable.ListBuffer
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration._
 import scala.io.Source
 
@@ -27,6 +30,67 @@ object SortAndPartition {
       if (line.length >= KeyLength) line.substring(0, KeyLength)
       else line.padTo(KeyLength, ' ').mkString
     }
+
+  // ------------------------------------------------------
+  // 테스트를 위한 단순화 버전 sort & partition
+
+  def run(inputDirs: List[String], pivotList: List[String]): Future[Unit] = {
+    val promise = Promise[Unit]()
+
+    println("[WORKER] Check input directory")
+
+    Future {
+      try {
+        // 1. 모든 디렉토리의 파일 읽어서 하나의 리스트로 모음
+        val allData = ListBuffer[String]()
+        inputDirs.foreach { dir =>
+          val d = new File(dir)
+          if (d.exists && d.isDirectory) {
+            d.listFiles.filter(_.isFile).foreach { file =>
+              val source = Source.fromFile(file)
+              allData ++= source.getLines()
+              source.close()
+            }
+          }
+        }
+
+        // 2. 전체 데이터 정렬
+        println("[WORKER] Sorting start")
+        val sortedData = allData.sortBy(line => line.take(10))
+
+        // 3. 임시 파일에 정렬 데이터 저장
+        val tempFile = Files.createTempFile("sorted_", ".txt")
+        Files.write(tempFile, sortedData.mkString("\n").getBytes, StandardOpenOption.WRITE)
+        println("[WORKER] Sorting complete")
+
+        // 4. pivot 기준으로 데이터를 나누어 별도 파일로 저장
+        val outputFiles = pivotList.indices.map(i => Files.createTempFile(s"partition_$i", ".txt"))
+        sortedData.foreach { line =>
+          val key = line.take(10)
+          var placed = false
+          for (i <- pivotList.indices if !placed) {
+            if (key <= pivotList(i)) {
+              Files.write(outputFiles(i), (line + "\n").getBytes, StandardOpenOption.APPEND)
+              placed = true
+            }
+          }
+          if (!placed) {
+            Files.write(outputFiles.last, (line + "\n").getBytes, StandardOpenOption.APPEND)
+          }
+        }
+
+        println(s"[WORKER] Sorting and partition complete. Output files: ${outputFiles.mkString(", ")}")
+        promise.success(())
+      } catch {
+        case e: Exception => promise.failure(e)
+      }
+    }
+
+    promise.future
+  }
+
+  // end
+  // ------------------------------------------------------
 
   // ------------------------------------------------------
   // Worker: 입력 파일 전체 정렬
