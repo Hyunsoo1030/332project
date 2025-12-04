@@ -34,7 +34,7 @@ object SortAndPartition {
   // ------------------------------------------------------
   // 테스트를 위한 단순화 버전 sort & partition
 
-  def run(inputDirs: List[String], pivotList: List[String]): Future[Unit] = {
+  def run(inputDirs: List[String], pivotList: List[String], myorder: Int): Future[Unit] = {
     val promise = Promise[Unit]()
 
     println("[WORKER] Check input directory")
@@ -64,7 +64,12 @@ object SortAndPartition {
         println("[WORKER] Sorting complete")
 
         // 4. pivot 기준으로 데이터를 나누어 별도 파일로 저장
-        val outputFiles = pivotList.indices.map(i => Files.createTempFile(s"partition_$i", ".txt"))
+        val outputFiles: Seq[Path] = (0 to pivotList.length).map { i =>
+          val path = Paths.get(s"partition_${myorder}_${i}.txt")
+          Files.deleteIfExists(path)
+          Files.createFile(path)
+          path
+        }
         sortedData.foreach { line =>
           val key = line.take(10)
           var placed = false

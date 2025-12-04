@@ -272,7 +272,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String]           // worker 로컬
           println("[WORKER] All workers are registered.")
       })
 
-    SortAndPartition.run(inputDirs.toList, Worker.pivotsList).onComplete {
+    SortAndPartition.run(inputDirs.toList, Worker.pivotsList, Worker.myOrder).onComplete {
       case Success(_) =>
         println("[WORKER] success sort and partition.")
         Worker.sortComplete.success(())
