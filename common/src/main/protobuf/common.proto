@@ -66,6 +66,7 @@ message ConnectionResponse {}
 message Address {
   string ip = 1;
   int32 port = 2;
+  int32 order = 3;
 }
 
 message ShuffleRequest {
@@ -82,12 +83,15 @@ message Entity {
 }
 
 message DataRequest {
-  int32 workerNumber = 1;
-  bool has_next = 2;
-  repeated Entity payload = 3;
+  int32 partitionIndex = 1;
+  int32 chunkIndex = 2;
+  int32 maxRecords = 3;
 }
 
-message DataResponse {}
+message DataResponse {
+  repeated Entity payload = 1;  // records in this chunk
+  bool hasMore            = 2;
+}
 
 message MergeRequest {}
 message MergeResponse {}
