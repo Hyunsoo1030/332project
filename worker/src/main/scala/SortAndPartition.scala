@@ -95,6 +95,7 @@ object SortAndPartition {
   // ------------------------------------------------------
   // Worker: 입력 파일 전체 정렬
   // ------------------------------------------------------
+  /*
   def workerSort(inputFiles: ListBuffer[String]): Unit = {
     println("[Worker] Sorting start")
 
@@ -298,4 +299,5 @@ object SortAndPartition {
     in.close()
     out.close()
   }
+*/
 }

@@ -102,6 +102,8 @@ object Worker extends App {
   val masterStub: MasterServiceGrpc.MasterServiceStub =
     MasterServiceGrpc.stub(channelToMaster)
 
+  println("[WORKER] set channel to master gRPC service.")
+
   //val masterIp    = sys.env("MASTER_IP")
   //val masterPort  = sys.env("MASTER_PORT").toInt
   //val dataPath    = sys.env("DATA_PATH")
@@ -273,8 +275,12 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String]           // worker 로컬
     Future {
       SortAndPartition.run(inputDirs.toList, Worker.pivotsList)
     }.onComplete {
-      case Success(_) => Worker.sortComplete.success(())
-      case Failure(e) => Worker.sortComplete.failure(e)
+      case Success(_) =>
+        println("[WORKER] success sort and partition.")
+        Worker.sortComplete.success(())
+      case Failure(e) =>
+        println("[WORKER] fail sort and partition.")
+        Worker.sortComplete.failure(e)
     }
 
     PivotResponse()
