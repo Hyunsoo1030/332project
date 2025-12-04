@@ -49,6 +49,10 @@ object Master extends App {
   val whenRegisterCompleted = Promise[Unit]()
   doSample()
 
+  // 모든 worker가 readyToShuffle을 호출했는지 확인
+  val readyFlags: mutable.Map[(String, Int), Boolean] = mutable.Map.empty
+  val whenAllReadyToShuffle = Promise[Unit]()
+
   // 플래그: 정상 종료 중인지 여부
   @volatile var normalShutdownInProgress = false
 
@@ -117,8 +121,8 @@ object Master extends App {
 
     whenSampleAcquired.future.onComplete(_ -> { //Sample data 전부 받아왔을 때 출력 -> 다음으로 sort 시작
       println("=====================================================\n" +
-              "[MASTER] All samples acquired. Start sorting samples." +
-            "\n=====================================================")
+        "[MASTER] All samples acquired. Start sorting samples." +
+        "\n=====================================================")
     })
 
     // 마스터에서 직접 정렬하는 단계
@@ -170,8 +174,8 @@ object Master extends App {
       Future.sequence(sendPivotFutures).onComplete { _ =>
         println("[MASTER] All pivots are sent to workers.")
         println("=================================\n" +
-                "[MASTER] Sampling phase finished." +
-              "\n=================================")
+          "[MASTER] Sampling phase finished." +
+          "\n=================================")
         println("Press ENTER to terminate master server.")
       }
     }
@@ -226,6 +230,8 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
 
     Master.workers += Master.WorkerEntry(req.workerHost, req.workerPort, channel, stub)
 
+    Master.readyFlags += ((req.workerHost, req.workerPort) -> false)
+
     println(
       s"[MASTER] Worker${Master.workers.length-1} with address ${req.workerHost}:${req.workerPort} registered."
     )
@@ -233,8 +239,8 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
     //등록 완료되면 sampling phase 시작하기 위함
     if (Master.workers.length == Master.numWorkers) { // test 위해 값 바꿀 수 있음, default 값은 20 유지
       println("================================================================\n" +
-              "[MASTER] All workers have registered. Initialize sampling phase." +
-            "\n================================================================")
+        "[MASTER] All workers have registered. Initialize sampling phase." +
+        "\n================================================================")
       Master.whenRegisterCompleted.trySuccess(())
     }
 
@@ -245,6 +251,31 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
   override def notifyConnection(req: ConnectionRequest): Future[ConnectionResponse] = Future {
     println(s"[MASTER] Connected from ${req.host}:${req.port}.")
     ConnectionResponse()
+  }
+
+  override def readyToShuffle(req: ReadyRequest): Future[ReadyResponse] = Future {
+    val key = (req.host, req.port)
+
+    // 해당 worker가 Master.workers 목록에 존재하는지 확인
+    if (!Master.readyFlags.contains(key)) {
+      println(s"[MASTER] WARNING: readyToShuffle received from unknown worker ${req.host}:${req.port}")
+    } else {
+      // ready 표시
+      Master.readyFlags.update(key, true)
+      println(s"[MASTER] Worker at ${req.host}:${req.port} is ready to shuffle.")
+    }
+
+    // 모든 worker가 ready 되었는지 검사
+    val allReady = Master.readyFlags.values.forall(_ == true)
+
+    if (allReady && !Master.whenAllReadyToShuffle.isCompleted) {
+      println("=====================================================")
+      println("[MASTER] All workers are ready to shuffle!")
+      println("=====================================================")
+      Master.whenAllReadyToShuffle.trySuccess(())
+    }
+
+    ReadyResponse()
   }
 
 }
