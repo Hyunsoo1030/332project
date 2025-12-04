@@ -2,7 +2,7 @@ package worker
 
 import io.grpc.{ManagedChannelBuilder, Server, ServerBuilder}
 
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import proto.common._
 import proto.common.{MasterServiceGrpc, WorkerServiceGrpc}
 
@@ -10,7 +10,7 @@ import java.nio.file.{Files, Path, Paths}
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
 import scala.jdk.CollectionConverters._
-import scala.util.Random
+import scala.util.{Random, Failure, Success}
 import proto.common.WorkerServiceGrpc.WorkerServiceStub
 
 import java.net.{Inet4Address, NetworkInterface}
@@ -102,6 +102,8 @@ object Worker extends App {
   val masterStub: MasterServiceGrpc.MasterServiceStub =
     MasterServiceGrpc.stub(channelToMaster)
 
+  println("[WORKER] set channel to master gRPC service.")
+
   //val masterIp    = sys.env("MASTER_IP")
   //val masterPort  = sys.env("MASTER_PORT").toInt
   //val dataPath    = sys.env("DATA_PATH")
@@ -129,6 +131,16 @@ object Worker extends App {
    masterStub.registerWorker(WorkerData(workerHost=workerHost, workerPort=workerPort))
 
   registerResponseF.onComplete(_ -> {println("[WORKER] Registration completed.")})
+
+  // Sort & Partition 완료 후 Master에게 신호 보내기
+  var sortComplete: Promise[Unit] = Promise[Unit]()
+  sortComplete.future.onComplete {
+    case Success(_) =>
+      println("[WORKER] Sort & Partition completed. Notifying master...")
+      masterStub.readyToShuffle(ReadyRequest(host=workerHost, port=workerPort))
+    case Failure(e) => println(s"[WORKER] Sort failed: ${e.getMessage}")
+  }
+
   server.awaitTermination()
 
 
@@ -259,6 +271,15 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String]           // worker 로컬
         if(workerCount == req.orderedWorkerData.length)
           println("[WORKER] All workers are registered.")
       })
+
+    SortAndPartition.run(inputDirs.toList, Worker.pivotsList, Worker.myOrder).onComplete {
+      case Success(_) =>
+        println("[WORKER] success sort and partition.")
+        Worker.sortComplete.success(())
+      case Failure(e) =>
+        println("[WORKER] fail sort and partition.")
+        Worker.sortComplete.failure(e)
+    }
 
     PivotResponse()
   }
