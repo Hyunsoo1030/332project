@@ -2,7 +2,7 @@ package worker
 
 import java.io._
 import java.util.concurrent.{ExecutorService, Executors, Semaphore}
-import java.nio.file.{Files, Paths, StandardOpenOption}
+import java.nio.file.{Files, Path, Paths, StandardOpenOption}
 
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.{Await, ExecutionContext, Future, Promise}
