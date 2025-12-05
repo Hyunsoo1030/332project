@@ -53,6 +53,45 @@ object Master extends App {
   val readyFlags: mutable.Map[(String, Int), Boolean] = mutable.Map.empty
   val whenAllReadyToShuffle = Promise[Unit]()
 
+  // 모든 worker가 "readyToShuffle"를 보낸 뒤에는 Shuffle phase 시작
+  Master.whenAllReadyToShuffle.future.onComplete {
+    case Success(_) =>
+      println("=====================================================")
+      println("[MASTER] All workers are ready. Starting shuffle phase.")
+      println("=====================================================")
+
+      // 모든 워커 주소를 Address 리스트로 구성 (order = 인덱스)
+      val addresses: List[Address] =
+        Master.workers.zipWithIndex.map { case (w, idx) =>
+          Address(
+            ip   = w.host,
+            port = w.port,
+            order = idx
+          )
+        }.toList
+
+      // 각 워커에게 자기 partition 번호(myOrder)를 알려주면서 startShuffle 호출
+      Master.workers.zipWithIndex.foreach { case (w, idx) =>
+        val req = ShuffleRequest(
+          workerAddresses = addresses,
+          myOrder         = idx
+        )
+
+        println(s"[MASTER] Sending startShuffle to worker#$idx ${w.host}:${w.port} ...")
+
+        w.stub.startShuffle(req).onComplete {
+          case Success(_) =>
+            println(s"[MASTER] Shuffle finished on worker#$idx (${w.host}:${w.port})")
+          case Failure(e) =>
+            println(s"[MASTER] Shuffle failed on worker#$idx: ${e.getMessage}")
+        }
+      }
+
+    case Failure(e) =>
+      println(s"[MASTER] whenAllReadyToShuffle failed: ${e.getMessage}")
+  }
+
+
   // 플래그: 정상 종료 중인지 여부
   @volatile var normalShutdownInProgress = false
 
