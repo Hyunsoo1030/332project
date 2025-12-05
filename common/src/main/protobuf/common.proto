@@ -73,28 +73,31 @@ message PivotResponse {}
 message Address {
   string ip = 1;
   int32 port = 2;
+  int32 order = 3;
 }
 
 message ShuffleRequest {
   repeated Address workerAddresses = 1;
-  int32 workerNumber = 2;
+  int32 myOrder = 2;
 }
 
 message ShuffleResponse {}
 
 
 message Entity {
-  string head = 1;
-  string body = 2;
+  string line = 1;
 }
 
 message DataRequest {
-  int32 workerNumber = 1;
-  bool has_next = 2;
-  repeated Entity payload = 3;
+  int32 partitionIndex = 1;
+  int32 chunkIndex = 2;
+  int32 maxRecords = 3;
 }
 
-message DataResponse {}
+message DataResponse {
+  repeated Entity payload = 1;  // records in this chunk
+  bool hasMore            = 2;
+}
 
 message MergeRequest {}
 message MergeResponse {}

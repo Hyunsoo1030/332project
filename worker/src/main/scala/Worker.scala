@@ -6,7 +6,7 @@ import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import proto.common._
 import proto.common.{MasterServiceGrpc, WorkerServiceGrpc}
 
-import java.nio.file.{Files, Path, Paths}
+import java.nio.file.{Files, Path, Paths, StandardOpenOption}
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
 import scala.jdk.CollectionConverters._
@@ -117,7 +117,7 @@ object Worker extends App {
   val server: Server =  //본인 서버 구축
     ServerBuilder
       .forPort(workerPort)
-      .addService(WorkerServiceGrpc.bindService(new WorkerServiceImpl(inputDirs), ec))
+      .addService(WorkerServiceGrpc.bindService(new WorkerServiceImpl(inputDirs, outputDir), ec))
       .build()
       .start()
 
@@ -128,7 +128,7 @@ object Worker extends App {
   println("[WORKER] Registering with registerWorker RPC...")
 
   val registerResponseF: Future[WorkerDataResponse] =
-   masterStub.registerWorker(WorkerData(workerHost=workerHost, workerPort=workerPort))
+    masterStub.registerWorker(WorkerData(workerHost=workerHost, workerPort=workerPort))
 
   registerResponseF.onComplete(_ -> {println("[WORKER] Registration completed.")})
 
@@ -159,11 +159,76 @@ object Worker extends App {
   }
 }
 
-class WorkerServiceImpl(inputDirs: ListBuffer[String]           // worker 로컬 데이터 파일 경로
+class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String           // worker 로컬 데이터 파일 경로
                        )(implicit ec: ExecutionContext)
   extends WorkerServiceGrpc.WorkerService {
 
   private val sampleBytes: Long = 1024L * 1024L // 1MB
+
+  // shuffle helper
+  private def partitionFile(srcOrder: Int, partitionIndex: Int): Path = {
+    Paths.get(outputDir, s"part-from-$srcOrder-$partitionIndex.out")
+  }
+
+  private def appendLinesToLocalFile(partitionIndex: Int,
+                                     senderOrder: Int,
+                                     lines: Seq[String]): Unit = {
+    if (lines.isEmpty) return
+
+    val path = Paths.get(outputDir, s"shuffled-part-$partitionIndex.out")
+
+    val writer = Files.newBufferedWriter(
+      path,
+      StandardCharsets.ISO_8859_1,
+      StandardOpenOption.CREATE,
+      StandardOpenOption.APPEND
+    )
+    try {
+      lines.foreach { line =>
+        writer.write(line)
+        writer.newLine()
+      }
+    } finally {
+      writer.close()
+    }
+  }
+
+  private def readChunkFromFile(file: Path,
+                                chunkIndex: Int,
+                                maxRecords: Int): (Seq[String], Boolean) = {
+    if (!Files.exists(file)) return (Seq.empty, false)
+
+    val startLine = chunkIndex * maxRecords
+    val reader = Files.newBufferedReader(file, StandardCharsets.ISO_8859_1)
+
+    val buf = ListBuffer[String]()
+    var lineNum = 0L
+    var eof = false
+    var hitChunkLimit = false
+
+    try {
+      var line: String = null
+      while (!eof && !hitChunkLimit) {
+        line = reader.readLine()
+        if (line == null) {
+          eof = true
+        } else {
+          if (lineNum >= startLine && buf.size < maxRecords) {
+            buf += line
+          }
+          lineNum += 1
+          if (buf.size >= maxRecords) {
+            hitChunkLimit = true
+          }
+        }
+      }
+    } finally {
+      reader.close()
+    }
+
+    val hasMore = !eof && hitChunkLimit
+    (buf.toList, hasMore)
+  }
 
   override def shutdown(req: ShutdownRequest): Future[ShutdownResponse] = Future {
     println("[WORKER] Shutdown RPC received.")
@@ -257,7 +322,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String]           // worker 로컬
 
     println(s"[WORKER] Acquired pivots: ${Worker.pivotsList}")
 
-      req.orderedWorkerData.filterNot(w => w.workerHost == Worker.workerHost && w.workerPort == Worker.workerPort)
+    req.orderedWorkerData.filterNot(w => w.workerHost == Worker.workerHost && w.workerPort == Worker.workerPort)
       .foreach(w => {
         val channel = ManagedChannelBuilder
           .forAddress(w.workerHost, w.workerPort)
@@ -289,14 +354,64 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String]           // worker 로컬
     ConnectionResponse()
   }
 
-  // 나머지 RPC들은 일단 TODO로 두거나 구현해 둔다
-  override def startShuffle(req: ShuffleRequest): Future[ShuffleResponse] =
-    Future.successful(ShuffleResponse()) // TODO: 실제 구현
+  override def startShuffle(req: ShuffleRequest): Future[ShuffleResponse] = Future {
+    val myOrder   = req.myOrder        // 내가 담당할 파티션 index
+    val chunkSize = 10000              // 한 chunk당 몇 줄씩 받을지
 
-  override def sendData(req: DataRequest): Future[DataResponse] =
-    Future.successful(DataResponse())    // TODO
+    println(s"[WORKER-$myOrder] startShuffle called.")
 
-  override def startMerge(req: MergeRequest): Future[MergeResponse] =
-    Future.successful(MergeResponse())   // TODO
+    // Worker.workers: sendPivots에서 구축해 둔 다른 워커들 목록
+    val sortedWorkers = Worker.workers.sortBy(_.order)
+
+    sortedWorkers.foreach { w =>
+      var chunkIndex = 0
+      var cont       = true
+
+      while (cont) {
+        val dataReq = DataRequest(
+          partitionIndex = myOrder,
+          chunkIndex     = chunkIndex,
+          maxRecords     = chunkSize
+        )
+
+        val resp = Await.result(w.stub.sendData(dataReq), 30.seconds)
+
+        // resp.payload 에 있는 Entity.line 들을
+        // 로컬 결과 파일 (예: outputDir/shuffled-part-<myOrder>.out)에 append
+        appendLinesToLocalFile(myOrder, w.order, resp.payload.map(_.line))
+
+        cont = resp.hasMore
+        chunkIndex += 1
+      }
+    }
+
+    println(s"[WORKER-$myOrder] Shuffle completed.")
+    ShuffleResponse()
+  }
+
+  // --------------------------
+  // sendData: partition 파일을 chunk 단위로 읽어 응답
+  // --------------------------
+  override def sendData(req: DataRequest): Future[DataResponse] = Future {
+    val srcOrder       = Worker.myOrder        // 나(보내는 쪽)의 order
+    val partitionIndex = req.partitionIndex    // 이 데이터를 받아갈 최종 워커
+    val chunkIndex     = req.chunkIndex
+    val maxRecords     = req.maxRecords
+
+    val file = partitionFile(srcOrder, partitionIndex)
+
+    val (lines, hasMore) = readChunkFromFile(file, chunkIndex, maxRecords)
+
+    DataResponse(
+      payload = lines.map(line => Entity(line = line)),
+      hasMore = hasMore
+    )
+  }
+
+  override def startMerge(req: MergeRequest): Future[MergeResponse] = Future {
+    println(s"[WORKER-${Worker.myOrder}] startMerge called (TODO: implement final merge).")
+    // TODO: outputDir/shuffled-part-<myOrder>.out 들을
+    //       최종 결과로 머지하는 로직을 넣으면 됨.
+    MergeResponse()
+  }
 }
-

@@ -53,6 +53,45 @@ object Master extends App {
   val readyFlags: mutable.Map[(String, Int), Boolean] = mutable.Map.empty
   val whenAllReadyToShuffle = Promise[Unit]()
 
+  // 모든 worker가 "readyToShuffle"를 보낸 뒤에는 Shuffle phase 시작
+  Master.whenAllReadyToShuffle.future.onComplete {
+    case Success(_) =>
+      println("=====================================================")
+      println("[MASTER] All workers are ready. Starting shuffle phase.")
+      println("=====================================================")
+
+      // 모든 워커 주소를 Address 리스트로 구성 (order = 인덱스)
+      val addresses: List[Address] =
+        Master.workers.zipWithIndex.map { case (w, idx) =>
+          Address(
+            ip   = w.host,
+            port = w.port,
+            order = idx
+          )
+        }.toList
+
+      // 각 워커에게 자기 partition 번호(myOrder)를 알려주면서 startShuffle 호출
+      Master.workers.zipWithIndex.foreach { case (w, idx) =>
+        val req = ShuffleRequest(
+          workerAddresses = addresses,
+          myOrder         = idx
+        )
+
+        println(s"[MASTER] Sending startShuffle to worker#$idx ${w.host}:${w.port} ...")
+
+        w.stub.startShuffle(req).onComplete {
+          case Success(_) =>
+            println(s"[MASTER] Shuffle finished on worker#$idx (${w.host}:${w.port})")
+          case Failure(e) =>
+            println(s"[MASTER] Shuffle failed on worker#$idx: ${e.getMessage}")
+        }
+      }
+
+    case Failure(e) =>
+      println(s"[MASTER] whenAllReadyToShuffle failed: ${e.getMessage}")
+  }
+
+
   // 플래그: 정상 종료 중인지 여부
   @volatile var normalShutdownInProgress = false
 
@@ -121,8 +160,8 @@ object Master extends App {
 
     whenSampleAcquired.future.onComplete(_ -> { //Sample data 전부 받아왔을 때 출력 -> 다음으로 sort 시작
       println("=====================================================\n" +
-              "[MASTER] All samples acquired. Start sorting samples." +
-            "\n=====================================================")
+        "[MASTER] All samples acquired. Start sorting samples." +
+        "\n=====================================================")
     })
 
     // 마스터에서 직접 정렬하는 단계
@@ -174,8 +213,8 @@ object Master extends App {
       Future.sequence(sendPivotFutures).onComplete { _ =>
         println("[MASTER] All pivots are sent to workers.")
         println("=================================\n" +
-                "[MASTER] Sampling phase finished." +
-              "\n=================================")
+          "[MASTER] Sampling phase finished." +
+          "\n=================================")
         println("Press ENTER to terminate master server.")
       }
     }
@@ -239,8 +278,8 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
     //등록 완료되면 sampling phase 시작하기 위함
     if (Master.workers.length == Master.numWorkers) { // test 위해 값 바꿀 수 있음, default 값은 20 유지
       println("================================================================\n" +
-              "[MASTER] All workers have registered. Initialize sampling phase." +
-            "\n================================================================")
+        "[MASTER] All workers have registered. Initialize sampling phase." +
+        "\n================================================================")
       Master.whenRegisterCompleted.trySuccess(())
     }
 
