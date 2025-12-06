@@ -369,6 +369,9 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
     val myOrder   = Worker.myOrder
     val chunkSize = 10000
 
+    val myShufflePath = Paths.get(outputDir, s"shuffled-part-$myOrder.out")
+    Files.deleteIfExists(myShufflePath)
+
     println(s"[WORKER-${Worker.myOrder}] startShuffle called for partition $myOrder.")
 
     // -------------------------------

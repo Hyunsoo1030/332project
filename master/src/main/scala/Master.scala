@@ -99,32 +99,38 @@ object Master extends App {
       println("[MASTER] All workers are ready. Starting merge phase.")
       println("=====================================================")
 
-      // 모든 워커 주소를 Address 리스트로 구성 (order = 인덱스)
-      val addresses: List[Address] =
+      // 각 worker에 대한 startMerge 호출 Future를 모은다
+      val mergeFutures: List[Future[MergeResponse]] =
         Master.workers.zipWithIndex.map { case (w, idx) =>
-          Address(
-            ip   = w.host,
-            port = w.port,
-            order = idx
-          )
+          val req = MergeRequest()
+
+          println(s"[MASTER] Sending startMerge to worker#$idx ${w.host}:${w.port} ...")
+
+          val f = w.stub.startMerge(req)
+          // 개별 워커 로그는 그대로 유지
+          f.onComplete {
+            case Success(_) =>
+              println(s"[MASTER] Merge finished on worker#$idx (${w.host}:${w.port})")
+            case Failure(e) =>
+              println(s"[MASTER] Merge failed on worker#$idx: ${e.getMessage}")
+          }
+          f
         }.toList
 
-      Master.workers.zipWithIndex.foreach { case (w, idx) =>
-        val req = MergeRequest()
-
-        println(s"[MASTER] Sending startMerge to worker#$idx ${w.host}:${w.port} ...")
-
-        w.stub.startMerge(req).onComplete {
-          case Success(_) =>
-            println(s"[MASTER] Merge finished on worker#$idx (${w.host}:${w.port})")
-          case Failure(e) =>
-            println(s"[MASTER] Merge failed on worker#$idx: ${e.getMessage}")
-        }
+      Future.sequence(mergeFutures).onComplete {
+        case Success(_) =>
+          println("=====================================================")
+          println("[MASTER] All merges finished. Final outputs are ready.")
+          println("=====================================================")
+          println("Press ENTER to terminate master server.")
+        case Failure(e) =>
+          println(s"[MASTER] Merge phase failed: ${e.getMessage}")
       }
 
     case Failure(e) =>
       println(s"[MASTER] whenAllReadyToMerge failed: ${e.getMessage}")
   }
+
 
   // 플래그: 정상 종료 중인지 여부
   @volatile var normalShutdownInProgress = false
@@ -249,7 +255,6 @@ object Master extends App {
         println("=================================\n" +
           "[MASTER] Sampling phase finished." +
           "\n=================================")
-        println("Press ENTER to terminate master server.")
       }
     }
   }
