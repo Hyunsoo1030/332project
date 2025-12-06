@@ -178,6 +178,7 @@ object SortAndPartition {
       while (starts.size < pivots.length + 1) {
         starts += raf.length()
       }
+      println("[WORKER] Partition offset calculation was successful.")
 
       starts.toList
     } finally {
