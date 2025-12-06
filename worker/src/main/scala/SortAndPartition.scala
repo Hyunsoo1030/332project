@@ -1,6 +1,7 @@
 package worker
 
 import java.io._
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.{ExecutorService, Executors, Semaphore}
 import java.nio.file.{Files, Path, Paths, StandardOpenOption}
 
@@ -144,43 +145,51 @@ object SortAndPartition {
   // ------------------------------------------------------
 
   // 각 partition의 시작 바이트 오프셋 반환
-  private def findPartitionStartOffsets(sortedFile: Path, pivots: List[String]): List[Long] = {
-    val starts = ListBuffer[Long]()
-    starts += 0L
-
-    if (pivots.isEmpty) return List(0L)
-
-    val raf = new RandomAccessFile(sortedFile.toFile, "r")
+  def findPartitionStartOffsets(mergedFile: Path, pivots: List[String], lineLength: Int = 100): List[Long] = {
+    val raf = new RandomAccessFile(mergedFile.toFile, "r")
     try {
-      var currentPivotIdx = 0
-      var line: String = null
+      val fileSize = raf.length()
+      val totalLines = (fileSize / lineLength).toInt
 
-      while ({
-        val offsetBefore = raf.getFilePointer()
-        val raw = raf.readLine()
-        if (raw == null) {
-          line = null
-        } else {
-          line = raw
-        }
-
-        if (line != null) {
-          val key = if (line.length >= KeyLength) line.substring(0, KeyLength) else line.padTo(KeyLength, ' ').mkString
-          while (currentPivotIdx < pivots.length && key > pivots(currentPivotIdx)) {
-            starts += offsetBefore
-            currentPivotIdx += 1
-          }
-        }
-
-        line != null
-      } ) ()
-
-      while (starts.size < pivots.length + 1) {
-        starts += raf.length()
+      // index번째 라인(0-based)의 고정길이 레코드를 읽어 문자열 반환
+      def readLineAt(index: Int): String = {
+        val offset = index.toLong * lineLength
+        raf.seek(offset)
+        val buf = new Array[Byte](lineLength)
+        raf.readFully(buf)
+        // UTF-8로 디코드하고, 뒤 공백 제거 (필요 없으면 stripTrailing 제거)
+        new String(buf, StandardCharsets.UTF_8)
       }
+
+      // upper_bound: 파일에서 첫 번째로 (line > pivot) 인 index의 바이트 offset을 반환
+      def upperBound(pivot: String): Long = {
+        var left = 0
+        var right = totalLines
+        while (left < right) {
+          val mid = (left + right) >>> 1
+          val midVal = readLineAt(mid)
+          // midVal <= pivot 이면 더 오른쪽 탐색
+          if (midVal <= pivot) left = mid + 1
+          else right = mid
+        }
+        left.toLong * lineLength
+      }
+
+      // 시작 오프셋 리스트: 0 (첫 파티션 시작) + 각 pivot의 upperBound
+      val starts = ListBuffer[Long]()
+      starts += 0L
+      for (p <- pivots) {
+        val off = upperBound(p)
+        starts += off
+      }
+
+      // 반환 (길이 = pivots.length + 1)
+      val result = starts.toList
+
+      // 단 한 번만 출력(요청하신 대로)
       println("[WORKER] Partition offset calculation was successful.")
 
-      starts.toList
+      result
     } finally {
       raf.close()
     }
