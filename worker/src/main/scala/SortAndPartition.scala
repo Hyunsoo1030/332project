@@ -190,4 +190,45 @@ object SortAndPartition {
       println("[WORKER] Sort and partition complete.")
     }
   }
+  // 1) 단일 파일에서 chunk들을 만드는 버전
+  private def createSortedChunksFromFile(file: Path): Future[List[Path]] = Future {
+    val chunkFutures = ListBuffer[Future[Path]]()
+    val buffer = ListBuffer[String]()
+
+    val br = Source.fromFile(file.toFile)
+    try {
+      for (line <- br.getLines()) {
+        buffer += line
+        if (buffer.size >= ChunkSize) {
+          val chunk = buffer.toList
+          buffer.clear()
+          chunkFutures += sortChunkAsync(chunk)
+        }
+      }
+    } finally {
+      br.close()
+    }
+
+    if (buffer.nonEmpty) {
+      chunkFutures += sortChunkAsync(buffer.toList)
+    }
+
+    Await.result(Future.sequence(chunkFutures.toList), Duration.Inf)
+  }
+
+  // 2) 단일 파일을 외부 정렬해서 outputPath로 저장하는 함수
+  def externalSortFile(inputPath: Path, outputPath: Path): Unit = {
+    println(s"[WORKER] externalSortFile: input=$inputPath output=$outputPath")
+
+    val chunks = Await.result(createSortedChunksFromFile(inputPath), Duration.Inf)
+    println(s"[WORKER] externalSortFile: created ${chunks.size} chunks")
+
+    val merged = multiLevelMerge(chunks)
+    println(s"[WORKER] externalSortFile: merged => $merged")
+
+    // 최종 결과를 outputPath로 이동
+    Files.deleteIfExists(outputPath)
+    Files.move(merged, outputPath)
+  }
+
 }

@@ -466,30 +466,18 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
 
   override def startMerge(req: MergeRequest): Future[MergeResponse] = Future {
     val myOrder = Worker.myOrder
-    val inputPath = Paths.get(outputDir, s"shuffled-part-$myOrder.out")
+    val inputPath  = Paths.get(outputDir, s"shuffled-part-$myOrder.out")
     val outputPath = Paths.get(outputDir, s"final-$myOrder.txt")
 
     if (!Files.exists(inputPath)) {
-      println(s"[WORKER-$myOrder] No shuffled file found.")
+      println(s"[WORKER-$myOrder] No shuffled file found: $inputPath")
+      MergeResponse()
+    } else {
+      println(s"[WORKER-$myOrder] startMerge: external sort on $inputPath")
+      SortAndPartition.externalSortFile(inputPath, outputPath)
+      println(s"[WORKER-$myOrder] Merge completed → $outputPath")
       MergeResponse()
     }
-
-    // 1) 파일 읽기
-    val lines = Files.readAllLines(inputPath, StandardCharsets.ISO_8859_1).asScala
-
-    // 2) key(앞 10바이트) 기준으로 정렬
-    val sorted = lines.sortBy(_.take(10))
-
-    // 3) 최종 결과 저장
-    Files.write(
-      outputPath,
-      sorted.mkString("\n").getBytes(StandardCharsets.ISO_8859_1),
-      StandardOpenOption.CREATE,
-      StandardOpenOption.TRUNCATE_EXISTING
-    )
-
-    println(s"[WORKER-$myOrder] Merge completed → $outputPath")
-
-    MergeResponse()
   }
+
 }
