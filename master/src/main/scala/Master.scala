@@ -50,7 +50,7 @@ object Master extends App {
   doSample()
 
   // 모든 worker가 readyToShuffle을 호출했는지 확인
-  val readyFlags: mutable.Map[(String, Int), Boolean] = mutable.Map.empty
+  val ShuffleReadyFlags: mutable.Map[(String, Int), Boolean] = mutable.Map.empty
   val whenAllReadyToShuffle = Promise[Unit]()
 
   // 모든 worker가 "readyToShuffle"를 보낸 뒤에는 Shuffle phase 시작
@@ -72,10 +72,7 @@ object Master extends App {
 
       // 각 워커에게 자기 partition 번호(myOrder)를 알려주면서 startShuffle 호출
       Master.workers.zipWithIndex.foreach { case (w, idx) =>
-        val req = ShuffleRequest(
-          workerAddresses = addresses,
-          myOrder         = idx
-        )
+        val req = ShuffleRequest()
 
         println(s"[MASTER] Sending startShuffle to worker#$idx ${w.host}:${w.port} ...")
 
@@ -91,6 +88,43 @@ object Master extends App {
       println(s"[MASTER] whenAllReadyToShuffle failed: ${e.getMessage}")
   }
 
+  // 모든 worker가 readyToMerge를 호출했는지 확인
+  val MergeReadyFlags: mutable.Map[(String, Int), Boolean] = mutable.Map.empty
+  val whenAllReadyToMerge = Promise[Unit]()
+
+  // 모든 worker가 shuffling을 완료하면 merge 시작
+  Master.whenAllReadyToMerge.future.onComplete {
+    case Success(_) =>
+      println("=====================================================")
+      println("[MASTER] All workers are ready. Starting merge phase.")
+      println("=====================================================")
+
+      // 모든 워커 주소를 Address 리스트로 구성 (order = 인덱스)
+      val addresses: List[Address] =
+        Master.workers.zipWithIndex.map { case (w, idx) =>
+          Address(
+            ip   = w.host,
+            port = w.port,
+            order = idx
+          )
+        }.toList
+
+      Master.workers.zipWithIndex.foreach { case (w, idx) =>
+        val req = MergeRequest()
+
+        println(s"[MASTER] Sending startMerge to worker#$idx ${w.host}:${w.port} ...")
+
+        w.stub.startMerge(req).onComplete {
+          case Success(_) =>
+            println(s"[MASTER] Merge finished on worker#$idx (${w.host}:${w.port})")
+          case Failure(e) =>
+            println(s"[MASTER] Merge failed on worker#$idx: ${e.getMessage}")
+        }
+      }
+
+    case Failure(e) =>
+      println(s"[MASTER] whenAllReadyToMerge failed: ${e.getMessage}")
+  }
 
   // 플래그: 정상 종료 중인지 여부
   @volatile var normalShutdownInProgress = false
@@ -269,7 +303,7 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
 
     Master.workers += Master.WorkerEntry(req.workerHost, req.workerPort, channel, stub)
 
-    Master.readyFlags += ((req.workerHost, req.workerPort) -> false)
+    Master.ShuffleReadyFlags += ((req.workerHost, req.workerPort) -> false)
 
     println(
       s"[MASTER] Worker${Master.workers.length-1} with address ${req.workerHost}:${req.workerPort} registered."
@@ -296,22 +330,44 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
     val key = (req.host, req.port)
 
     // 해당 worker가 Master.workers 목록에 존재하는지 확인
-    if (!Master.readyFlags.contains(key)) {
+    if (!Master.ShuffleReadyFlags.contains(key)) {
       println(s"[MASTER] WARNING: readyToShuffle received from unknown worker ${req.host}:${req.port}")
     } else {
       // ready 표시
-      Master.readyFlags.update(key, true)
+      Master.ShuffleReadyFlags.update(key, true)
       println(s"[MASTER] Worker at ${req.host}:${req.port} is ready to shuffle.")
     }
 
     // 모든 worker가 ready 되었는지 검사
-    val allReady = Master.readyFlags.values.forall(_ == true)
+    val allReady = Master.ShuffleReadyFlags.values.forall(_ == true)
 
     if (allReady && !Master.whenAllReadyToShuffle.isCompleted) {
       println("=====================================================")
       println("[MASTER] All workers are ready to shuffle!")
       println("=====================================================")
       Master.whenAllReadyToShuffle.trySuccess(())
+    }
+
+    ReadyResponse()
+  }
+
+  override def readyToMerge(req: ReadyRequest) : Future[ReadyResponse] = Future {
+    val key = (req.host, req.port)
+
+    if (!Master.MergeReadyFlags.contains(key)) {
+      Master.MergeReadyFlags += (key -> false)
+    }
+
+    Master.MergeReadyFlags.update(key, true)
+    println(s"[MASTER] Worker at ${req.host}:${req.port} is ready to merge.")
+
+    val allReady = Master.MergeReadyFlags.values.forall(_ == true)
+
+    if (allReady && !Master.whenAllReadyToMerge.isCompleted) {
+      println("===============================================")
+      println("[MASTER] All workers finished shuffle! Starting merge phase.")
+      println("===============================================")
+      Master.whenAllReadyToMerge.trySuccess(())
     }
 
     ReadyResponse()
