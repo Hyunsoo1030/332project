@@ -133,12 +133,21 @@ object Worker extends App {
   registerResponseF.onComplete(_ -> {println("[WORKER] Registration completed.")})
 
   // Sort & Partition 완료 후 Master에게 신호 보내기
-  var sortComplete: Promise[Unit] = Promise[Unit]()
+  val sortComplete: Promise[Unit] = Promise[Unit]()
   sortComplete.future.onComplete {
     case Success(_) =>
       println("[WORKER] Sort & Partition completed. Notifying master...")
       masterStub.readyToShuffle(ReadyRequest(host=workerHost, port=workerPort))
     case Failure(e) => println(s"[WORKER] Sort failed: ${e.getMessage}")
+  }
+
+  // shuffle 완료 후 Master에게 신호 보내기
+  val shuffleComplete: Promise[Unit] = Promise[Unit]()
+  shuffleComplete.future.onComplete{
+    case Success(_) =>
+      println("[WORKER] Shuffling completed. Notifying master...")
+      masterStub.readyToMerge(ReadyRequest(host=workerHost, port=workerPort))
+    case Failure(e) => println(s"[WORKER] Shuffling failed: ${e.getMessage}")
   }
 
   server.awaitTermination()
@@ -167,7 +176,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
 
   // shuffle helper
   private def partitionFile(srcOrder: Int, partitionIndex: Int): Path = {
-    Paths.get(outputDir, s"part-from-$srcOrder-$partitionIndex.out")
+    Paths.get(s"partition_${srcOrder}_${partitionIndex}.txt")
   }
 
   private def appendLinesToLocalFile(partitionIndex: Int,
@@ -229,6 +238,8 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
     val hasMore = !eof && hitChunkLimit
     (buf.toList, hasMore)
   }
+
+
 
   override def shutdown(req: ShutdownRequest): Future[ShutdownResponse] = Future {
     println("[WORKER] Shutdown RPC received.")
@@ -354,40 +365,88 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
     ConnectionResponse()
   }
 
-  override def startShuffle(req: ShuffleRequest): Future[ShuffleResponse] = Future {
-    val myOrder   = req.myOrder        // 내가 담당할 파티션 index
-    val chunkSize = 10000              // 한 chunk당 몇 줄씩 받을지
+  override def startShuffle(req: ShuffleRequest): Future[ShuffleResponse] = {
+    val myOrder   = Worker.myOrder
+    val chunkSize = 10000
 
-    println(s"[WORKER-$myOrder] startShuffle called.")
+    val myShufflePath = Paths.get(outputDir, s"shuffled-part-$myOrder.out")
+    Files.deleteIfExists(myShufflePath)
 
-    // Worker.workers: sendPivots에서 구축해 둔 다른 워커들 목록
-    val sortedWorkers = Worker.workers.sortBy(_.order)
+    println(s"[WORKER-${Worker.myOrder}] startShuffle called for partition $myOrder.")
 
-    sortedWorkers.foreach { w =>
-      var chunkIndex = 0
-      var cont       = true
+    // -------------------------------
+    // 1) 자기 로컬 partition 먼저 읽기
+    // -------------------------------
+    def readLocalPartition(): Future[Unit] = Future {
+      val localSrcOrder = Worker.myOrder
+      var chunkIndex    = 0
+      var cont          = true
+
+      println(s"[WORKER-${Worker.myOrder}] reading local partition part-from-$localSrcOrder-$myOrder.out")
 
       while (cont) {
-        val dataReq = DataRequest(
-          partitionIndex = myOrder,
-          chunkIndex     = chunkIndex,
-          maxRecords     = chunkSize
-        )
+        val file = partitionFile(localSrcOrder, myOrder)
+        val (lines, hasMore) = readChunkFromFile(file, chunkIndex, chunkSize)
 
-        val resp = Await.result(w.stub.sendData(dataReq), 30.seconds)
+        if (lines.nonEmpty) {
+          appendLinesToLocalFile(myOrder, localSrcOrder, lines)
+        }
 
-        // resp.payload 에 있는 Entity.line 들을
-        // 로컬 결과 파일 (예: outputDir/shuffled-part-<myOrder>.out)에 append
-        appendLinesToLocalFile(myOrder, w.order, resp.payload.map(_.line))
-
-        cont = resp.hasMore
+        cont = hasMore
         chunkIndex += 1
       }
     }
 
-    println(s"[WORKER-$myOrder] Shuffle completed.")
-    ShuffleResponse()
+    // -------------------------------
+    // 2) 한 워커에서 모든 chunk를 pull
+    //    (재귀 + flatMap, 완전 비동기)
+    // -------------------------------
+    def pullFromWorker(w: Worker.WorkerEntry, chunkIndex: Int = 0): Future[Unit] = {
+      val dataReq = DataRequest(
+        partitionIndex = myOrder,
+        chunkIndex     = chunkIndex,
+        maxRecords     = chunkSize
+      )
+
+      w.stub.sendData(dataReq).flatMap { resp =>
+        val lines = resp.payload.map(_.line)
+
+        if (lines.nonEmpty) {
+          appendLinesToLocalFile(myOrder, w.order, lines)
+        }
+
+        if (resp.hasMore) {
+          // 다음 chunk 비동기로 이어붙임
+          pullFromWorker(w, chunkIndex + 1)
+        } else {
+          Future.successful(())
+        }
+      }
+    }
+
+    // -------------------------------
+    // 3) 모든 리모트 워커에서 동시에 pull
+    // -------------------------------
+    val sortedWorkers = Worker.workers.sortBy(_.order)
+
+    val remotePullF: Future[Unit] =
+      Future.sequence(sortedWorkers.map(w => pullFromWorker(w))).map(_ => ())
+
+    // -------------------------------
+    // 4) 전체 순서: 로컬 읽고 → 리모트들 pull
+    //    (원하면 둘을 동시에 돌리고 싶으면 병렬로도 가능)
+    // -------------------------------
+    for {
+      _ <- readLocalPartition()  // 로컬 먼저
+      _ <- remotePullF           // 그 다음 리모트들에서 병렬로 pull
+    } yield {
+      println(s"[WORKER-$myOrder] Shuffle completed (async).")
+      Worker.shuffleComplete.success(())
+      ShuffleResponse()
+    }
   }
+
+
 
   // --------------------------
   // sendData: partition 파일을 chunk 단위로 읽어 응답
@@ -409,9 +468,19 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
   }
 
   override def startMerge(req: MergeRequest): Future[MergeResponse] = Future {
-    println(s"[WORKER-${Worker.myOrder}] startMerge called (TODO: implement final merge).")
-    // TODO: outputDir/shuffled-part-<myOrder>.out 들을
-    //       최종 결과로 머지하는 로직을 넣으면 됨.
-    MergeResponse()
+    val myOrder = Worker.myOrder
+    val inputPath  = Paths.get(outputDir, s"shuffled-part-$myOrder.out")
+    val outputPath = Paths.get(outputDir, s"final-$myOrder.txt")
+
+    if (!Files.exists(inputPath)) {
+      println(s"[WORKER-$myOrder] No shuffled file found: $inputPath")
+      MergeResponse()
+    } else {
+      println(s"[WORKER-$myOrder] startMerge: external sort on $inputPath")
+      SortAndPartition.externalSortFile(inputPath, outputPath)
+      println(s"[WORKER-$myOrder] Merge completed → $outputPath")
+      MergeResponse()
+    }
   }
+
 }

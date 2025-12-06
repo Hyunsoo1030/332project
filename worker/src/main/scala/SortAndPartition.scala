@@ -4,7 +4,7 @@ import java.io._
 import java.util.concurrent.{ExecutorService, Executors, Semaphore}
 import java.nio.file.{Files, Path, Paths, StandardOpenOption}
 
-import scala.collection.mutable.ListBuffer
+import scala.collection.mutable.{ListBuffer, PriorityQueue}
 import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration._
 import scala.io.Source
@@ -22,9 +22,8 @@ object SortAndPartition {
 
   private val TempPrefix = "sorted_chunk_"
   private val TempSuffix = ".tmp"
-  private val SortedOneFile = "sorted"
 
-  // lineOrdering: 앞 10바이트 기준 정렬
+  // Sorting key: 앞 10바이트 기준
   private val lineOrdering: Ordering[String] =
     Ordering.by { line =>
       if (line.length >= KeyLength) line.substring(0, KeyLength)
@@ -32,277 +31,204 @@ object SortAndPartition {
     }
 
   // ------------------------------------------------------
-  // 테스트를 위한 단순화 버전 sort & partition
+  //                     CHUNK SORT
+  // ------------------------------------------------------
+
+  private def sortChunkAsync(lines: List[String]): Future[Path] = Future {
+    val sorted = lines.sorted(lineOrdering)
+
+    val tempPath = Files.createTempFile(TempPrefix, TempSuffix)
+    Files.write(tempPath, sorted.mkString("\n").getBytes)
+
+    tempPath
+  }
+
+  private def createSortedChunks(inputDirs: List[String]): Future[List[Path]] = Future {
+    val chunkFutures = ListBuffer[Future[Path]]()
+    val buffer = ListBuffer[String]()
+
+    inputDirs.foreach { dir =>
+      val d = new File(dir)
+      if (d.exists && d.isDirectory) {
+        d.listFiles.filter(_.isFile).foreach { file =>
+          val br = Source.fromFile(file)
+
+          for (line <- br.getLines()) {
+            buffer += line
+
+            if (buffer.size >= ChunkSize) {
+              val chunk = buffer.toList
+              buffer.clear()
+              chunkFutures += sortChunkAsync(chunk)
+            }
+          }
+
+          br.close()
+        }
+      }
+    }
+
+    // 마지막 chunk 처리
+    if (buffer.nonEmpty) {
+      chunkFutures += sortChunkAsync(buffer.toList)
+    }
+
+    Await.result(Future.sequence(chunkFutures.toList), Duration.Inf)
+  }
+
+  // ------------------------------------------------------
+  //                     K-WAY MERGE
+  // ------------------------------------------------------
+
+  private case class Entry(line: String, idx: Int)
+  private implicit val entryOrdering: Ordering[Entry] =
+    Ordering.by(_.line.take(KeyLength))
+
+  private def mergeSortedChunks(chunkFiles: List[Path]): Path = {
+    if (chunkFiles.size == 1)
+      return chunkFiles.head
+
+    val readers = chunkFiles.map(p => Source.fromFile(p.toFile).getLines())
+
+    val pq = PriorityQueue.empty[Entry](entryOrdering.reverse)
+
+    // 초기 라인 로딩
+    for ((it, idx) <- readers.zipWithIndex) {
+      if (it.hasNext)
+        pq.enqueue(Entry(it.next(), idx))
+    }
+
+    val out = Files.createTempFile("merged_", ".tmp")
+    val bw = new BufferedWriter(new FileWriter(out.toFile))
+
+    while (pq.nonEmpty) {
+      val Entry(line, idx) = pq.dequeue()
+
+      bw.write(line)
+      bw.newLine()
+
+      val it = readers(idx)
+      if (it.hasNext)
+        pq.enqueue(Entry(it.next(), idx))
+    }
+
+    bw.close()
+    out
+  }
+
+  // fanIn 개씩 묶어서 단계적으로 파일 수를 줄임
+  private def multiLevelMerge(files: List[Path], fanIn: Int = 32): Path = {
+    var current = files
+
+    while (current.size > 1) {
+      val grouped = current.grouped(fanIn).toList
+
+      val merged = grouped.map { group =>
+        Future {
+          mergeSortedChunks(group)
+        }
+      }
+
+      current = Await.result(Future.sequence(merged), Duration.Inf)
+    }
+
+    current.head
+  }
+
+  // ------------------------------------------------------
+  //                     PARTITION
+  // ------------------------------------------------------
+
+  private def partitionSortedFile(sortedFile: Path, pivotList: List[String], myorder: Int): Unit = {
+    val outputFiles: Seq[Path] = (0 to pivotList.length).map { i =>
+      val path = Paths.get(s"partition_${myorder}_${i}.txt")
+      Files.deleteIfExists(path)
+      Files.createFile(path)
+      path
+    }
+
+    val br = Source.fromFile(sortedFile.toFile)
+
+    for (line <- br.getLines()) {
+      val key = line.take(KeyLength)
+      var placed = false
+
+      for (i <- pivotList.indices if !placed) {
+        if (key <= pivotList(i)) {
+          Files.write(outputFiles(i), (line + "\n").getBytes, StandardOpenOption.APPEND)
+          placed = true
+        }
+      }
+
+      if (!placed) {
+        Files.write(outputFiles.last, (line + "\n").getBytes, StandardOpenOption.APPEND)
+      }
+    }
+
+    br.close()
+    println(s"[WORKER] Partition complete.")
+  }
+
+  // ------------------------------------------------------
+  //                     RUN
+  // ------------------------------------------------------
 
   def run(inputDirs: List[String], pivotList: List[String], myorder: Int): Future[Unit] = {
-    val promise = Promise[Unit]()
-
-    println("[WORKER] Check input directory")
-
     Future {
-      try {
-        // 1. 모든 디렉토리의 파일 읽어서 하나의 리스트로 모음
-        val allData = ListBuffer[String]()
-        inputDirs.foreach { dir =>
-          val d = new File(dir)
-          if (d.exists && d.isDirectory) {
-            d.listFiles.filter(_.isFile).foreach { file =>
-              val source = Source.fromFile(file)
-              allData ++= source.getLines()
-              source.close()
-            }
-          }
-        }
+      println("[WORKER] Creating sorted chunks...")
+      val chunks = Await.result(createSortedChunks(inputDirs), Duration.Inf)
+      println(s"[WORKER] Created ${chunks.size} chunks.")
 
-        // 2. 전체 데이터 정렬
-        println("[WORKER] Sorting start")
-        val sortedData = allData.sortBy(line => line.take(10))
+      println("[WORKER] K-way merging...")
+      val merged = multiLevelMerge(chunks)
+      println(s"[WORKER] Merge complete: $merged")
 
-        // 3. 임시 파일에 정렬 데이터 저장
-        val tempFile = Files.createTempFile("sorted_", ".txt")
-        Files.write(tempFile, sortedData.mkString("\n").getBytes, StandardOpenOption.WRITE)
-        println("[WORKER] Sorting complete")
+      println("[WORKER] Partitioning...")
+      partitionSortedFile(merged, pivotList, myorder)
+      Files.deleteIfExists(merged)
 
-        // 4. pivot 기준으로 데이터를 나누어 별도 파일로 저장
-        val outputFiles: Seq[Path] = (0 to pivotList.length).map { i =>
-          val path = Paths.get(s"partition_${myorder}_${i}.txt")
-          Files.deleteIfExists(path)
-          Files.createFile(path)
-          path
-        }
-        sortedData.foreach { line =>
-          val key = line.take(10)
-          var placed = false
-          for (i <- pivotList.indices if !placed) {
-            if (key <= pivotList(i)) {
-              Files.write(outputFiles(i), (line + "\n").getBytes, StandardOpenOption.APPEND)
-              placed = true
-            }
-          }
-          if (!placed) {
-            Files.write(outputFiles.last, (line + "\n").getBytes, StandardOpenOption.APPEND)
-          }
-        }
-
-        println(s"[WORKER] Sorting and partition complete. Output files: ${outputFiles.mkString(", ")}")
-        promise.success(())
-      } catch {
-        case e: Exception => promise.failure(e)
-      }
+      println("[WORKER] Sort and partition complete.")
     }
-
-    promise.future
   }
+  // 1) 단일 파일에서 chunk들을 만드는 버전
+  private def createSortedChunksFromFile(file: Path): Future[List[Path]] = Future {
+    val chunkFutures = ListBuffer[Future[Path]]()
+    val buffer = ListBuffer[String]()
 
-  // end
-  // ------------------------------------------------------
-
-  // ------------------------------------------------------
-  // Worker: 입력 파일 전체 정렬
-  // ------------------------------------------------------
-  /*
-  def workerSort(inputFiles: ListBuffer[String]): Unit = {
-    println("[Worker] Sorting start")
-
-    val allChunkFiles = mutable.Buffer[File]()
-    inputFiles.foreach { filename =>
-      allChunkFiles ++= createSortedChunks(filename)
-    }
-
+    val br = Source.fromFile(file.toFile)
     try {
-      kWayMerge(allChunkFiles.toSeq, SortedOneFile)
-    } finally {
-      allChunkFiles.foreach(f => if (f.exists()) f.delete())
-    }
-
-    println("[Worker] Sorting complete")
-  }
-
-
-  // ------------------------------------------------------
-  // Worker: 파티션 분배
-  // ------------------------------------------------------
-  def workerPartition(numWorkers: Int,
-                      pivots: Seq[String],
-                      prefix: String = "worker-"): Unit = {
-
-    require(pivots.size == numWorkers - 1)
-
-    println("[Worker] Partitioning start")
-
-    val src = Source.fromFile(SortedOneFile)
-    val buffers = Array.fill(numWorkers)(mutable.Buffer[String]())
-
-    try {
-      val iter = src.getLines()
-
-      while (iter.hasNext) {
-        val chunk = iter.take(ChunkSize).toArray
-        processChunk(chunk, buffers, pivots)
-
-        if (buffers.exists(_.size > ChunkSize / numWorkers))
-          flushBuffers(buffers, prefix)
-      }
-
-      flushBuffers(buffers, prefix)
-    } finally {
-      src.close()
-    }
-
-    println("[Worker] Partitioning complete")
-  }
-
-
-  // ------------------------------------------------------
-  // Chunk 생성 + 정렬 (로컬 정렬)
-  // ------------------------------------------------------
-  private def createSortedChunks(inputFile: String): Seq[File] = {
-    val src = Source.fromFile(inputFile)
-    val futures = mutable.Buffer[Future[File]]()
-    var chunkIndex = 0
-
-    try {
-      val iter = src.getLines()
-
-      while (iter.hasNext) {
-        val chunk = iter.take(ChunkSize).toArray
-        if (chunk.nonEmpty) {
-
-          val id = chunkIndex
-          chunkIndex += 1
-
-          chunkSemaphore.acquire()
-
-          val f = Future {
-            try {
-              val sorted = chunk.sorted(lineOrdering)
-              val tmpFile = File.createTempFile(TempPrefix + id + "_", TempSuffix)
-
-              val bw = new BufferedWriter(new FileWriter(tmpFile))
-              sorted.foreach { line =>
-                bw.write(line); bw.newLine()
-              }
-              bw.close()
-
-              tmpFile
-            } finally {
-              chunkSemaphore.release()
-            }
-          }
-
-          futures += f
+      for (line <- br.getLines()) {
+        buffer += line
+        if (buffer.size >= ChunkSize) {
+          val chunk = buffer.toList
+          buffer.clear()
+          chunkFutures += sortChunkAsync(chunk)
         }
       }
-
-      // 안전한 배치 처리
-      val result = mutable.Buffer[File]()
-      futures.grouped(MaxConcurrentChunks).foreach { batch =>
-        result ++= Await.result(Future.sequence(batch), Duration.Inf)
-      }
-
-      result.toSeq
     } finally {
-      src.close()
+      br.close()
     }
+
+    if (buffer.nonEmpty) {
+      chunkFutures += sortChunkAsync(buffer.toList)
+    }
+
+    Await.result(Future.sequence(chunkFutures.toList), Duration.Inf)
   }
 
+  // 2) 단일 파일을 외부 정렬해서 outputPath로 저장하는 함수
+  def externalSortFile(inputPath: Path, outputPath: Path): Unit = {
+    println(s"[WORKER] externalSortFile: input=$inputPath output=$outputPath")
 
-  // ------------------------------------------------------
-  // K-way Merge (단일 스레드)
-  // ------------------------------------------------------
-  private def kWayMerge(files: Seq[File], outName: String): Unit = {
-    if (files.isEmpty) {
-      new File(outName).createNewFile()
-      return
-    }
-    if (files.size == 1) {
-      copyFile(files.head, new File(outName))
-      return
-    }
+    val chunks = Await.result(createSortedChunksFromFile(inputPath), Duration.Inf)
+    println(s"[WORKER] externalSortFile: created ${chunks.size} chunks")
 
-    val readers = files.map(f => new BufferedReader(new FileReader(f))).toArray
-    val out = new BufferedWriter(new FileWriter(outName))
+    val merged = multiLevelMerge(chunks)
+    println(s"[WORKER] externalSortFile: merged => $merged")
 
-    implicit val pqOrd: Ordering[(String, Int)] =
-      Ordering.by[(String, Int), String](_._1)(lineOrdering).reverse
-
-    val pq = mutable.PriorityQueue[(String, Int)]()
-
-    try {
-      for (i <- readers.indices) {
-        val line = readers(i).readLine()
-        if (line != null) pq.enqueue((line, i))
-      }
-
-      while (pq.nonEmpty) {
-        val (line, idx) = pq.dequeue()
-        out.write(line); out.newLine()
-
-        val next = readers(idx).readLine()
-        if (next != null) pq.enqueue((next, idx))
-      }
-
-    } finally {
-      out.close()
-      readers.foreach(_.close())
-    }
+    // 최종 결과를 outputPath로 이동
+    Files.deleteIfExists(outputPath)
+    Files.move(merged, outputPath)
   }
 
-
-  // ------------------------------------------------------
-  // 파티션 분배 로직
-  // ------------------------------------------------------
-  private def processChunk(chunk: Array[String],
-                           buffers: Array[mutable.Buffer[String]],
-                           pivots: Seq[String]): Unit = {
-
-    val last = pivots.length
-
-    chunk.foreach { line =>
-      val key =
-        if (line.length >= KeyLength) line.substring(0, KeyLength)
-        else line.padTo(KeyLength, ' ').mkString
-
-      // 올바른 문자열 비교
-      var idx = 0
-      while (idx < last && key.compareTo(pivots(idx)) > 0) idx += 1
-
-      buffers(idx) += line
-    }
-  }
-
-  private def flushBuffers(buffers: Array[mutable.Buffer[String]],
-                           prefix: String): Unit = {
-
-    buffers.zipWithIndex.foreach { case (buf, idx) =>
-      if (buf.nonEmpty) {
-        val file = new File(s"$prefix$idx.out")
-        val bw = new BufferedWriter(new FileWriter(file, true))
-
-        buf.foreach { line =>
-          bw.write(line); bw.newLine()
-        }
-
-        bw.close()
-        buf.clear()
-      }
-    }
-  }
-
-
-  // ------------------------------------------------------
-  // 파일 복사
-  // ------------------------------------------------------
-  private def copyFile(src: File, dst: File): Unit = {
-    val in = new BufferedInputStream(new FileInputStream(src))
-    val out = new BufferedOutputStream(new FileOutputStream(dst))
-
-    val buf = new Array[Byte](1024 * 1024)
-    Iterator.continually(in.read(buf)).takeWhile(_ != -1)
-      .foreach(n => out.write(buf, 0, n))
-
-    in.close()
-    out.close()
-  }
-*/
 }
