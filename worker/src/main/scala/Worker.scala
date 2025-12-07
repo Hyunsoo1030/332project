@@ -441,6 +441,17 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
       _ <- remotePullF           // 그 다음 리모트들에서 병렬로 pull
     } yield {
       println(s"[WORKER-$myOrder] Shuffle completed (async).")
+
+      val pattern = s"partition_${Worker.myOrder}_"
+      val cwd = Paths.get(".")
+      Files.list(cwd).forEach { p =>
+        val name = p.getFileName.toString
+        if (name.startsWith(pattern) && name.endsWith(".txt")) {
+          println(s"[WORKER-$myOrder] deleting partition file: $name")
+          Files.deleteIfExists(p)
+        }
+      }
+
       Worker.shuffleComplete.success(())
       ShuffleResponse()
     }
@@ -479,6 +490,10 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
       println(s"[WORKER-$myOrder] startMerge: external sort on $inputPath")
       SortAndPartition.externalSortFile(inputPath, outputPath)
       println(s"[WORKER-$myOrder] Merge completed → $outputPath")
+
+      println(s"[WORKER-$myOrder] deleting shuffled file: $inputPath")
+      Files.deleteIfExists(inputPath)
+
       MergeResponse()
     }
   }
