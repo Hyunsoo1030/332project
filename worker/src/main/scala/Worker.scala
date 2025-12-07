@@ -175,7 +175,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
   private val sampleBytes: Long = 1024L * 1024L // 1MB
 
   // shuffle helper
-  private def partitionFile(srcOrder: Int, partitionIndex: Int): Path = {
+  private def GetPartitionFile(srcOrder: Int, partitionIndex: Int): Path = {
     Paths.get(s"partition_${srcOrder}_${partitionIndex}.txt")
   }
 
@@ -205,39 +205,49 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
   private def readChunkFromFile(file: Path,
                                 chunkIndex: Int,
                                 maxRecords: Int): (Seq[String], Boolean) = {
+    val RecordSize = 100
+
     if (!Files.exists(file)) return (Seq.empty, false)
 
-    val startLine = chunkIndex * maxRecords
-    val reader = Files.newBufferedReader(file, StandardCharsets.ISO_8859_1)
-
+    val startOffset = chunkIndex.toLong * maxRecords * RecordSize
     val buf = ListBuffer[String]()
-    var lineNum = 0L
-    var eof = false
-    var hitChunkLimit = false
+
+    val channel = Files.newByteChannel(file, StandardOpenOption.READ)
 
     try {
-      var line: String = null
-      while (!eof && !hitChunkLimit) {
-        line = reader.readLine()
-        if (line == null) {
-          eof = true
-        } else {
-          if (lineNum >= startLine && buf.size < maxRecords) {
-            buf += line
-          }
-          lineNum += 1
-          if (buf.size >= maxRecords) {
-            hitChunkLimit = true
-          }
-        }
-      }
-    } finally {
-      reader.close()
-    }
+      channel.position(startOffset)
 
-    val hasMore = !eof && hitChunkLimit
-    (buf.toList, hasMore)
+      val buffer = java.nio.ByteBuffer.allocate(RecordSize)
+
+      var readCount = 0
+      var bytesRead = channel.read(buffer)
+
+      while (bytesRead == RecordSize && readCount < maxRecords) {
+        buffer.flip()
+
+        val arr = new Array[Byte](RecordSize)
+        buffer.get(arr)
+
+        // 그대로 문자열로 변환 (ISO_8859_1로 1:1 매핑)
+        val record = new String(arr, StandardCharsets.ISO_8859_1)
+        buf += record
+
+        readCount += 1
+        buffer.clear()
+
+        bytesRead = channel.read(buffer)
+      }
+
+      // hasMore = 아직 파일 남아 있음 && 읽은 레코드가 maxRecords에 도달함
+      val hasMore = bytesRead == RecordSize || channel.position() < Files.size(file)
+
+      (buf.toList, hasMore)
+
+    } finally {
+      channel.close()
+    }
   }
+
 
 
 
@@ -385,7 +395,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
       println(s"[WORKER-${Worker.myOrder}] reading local partition part-from-$localSrcOrder-$myOrder.out")
 
       while (cont) {
-        val file = partitionFile(localSrcOrder, myOrder)
+        val file = GetPartitionFile(localSrcOrder, myOrder)
         val (lines, hasMore) = readChunkFromFile(file, chunkIndex, chunkSize)
 
         if (lines.nonEmpty) {
@@ -457,7 +467,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
     val chunkIndex     = req.chunkIndex
     val maxRecords     = req.maxRecords
 
-    val file = partitionFile(srcOrder, partitionIndex)
+    val file = GetPartitionFile(srcOrder, partitionIndex)
 
     val (lines, hasMore) = readChunkFromFile(file, chunkIndex, maxRecords)
 

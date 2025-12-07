@@ -44,6 +44,10 @@ object Master extends App {
       .build()
       .start()
 
+  MasterState.numWorkers = args(0).toInt
+  MasterState.host = findMyIp()
+  MasterState.port = 8915
+
   println(s"[MASTER] gRPC server started, listening on $host:$port")
 
   val whenRegisterCompleted = Promise[Unit]()
@@ -277,6 +281,7 @@ object Master extends App {
 
 
 // 실제 RPC 구현체
+// 실제 RPC 구현체
 class MasterServiceImpl(implicit ec: ExecutionContext)
   extends MasterServiceGrpc.MasterService {
 
@@ -296,7 +301,6 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
       s"[MASTER] Received WorkerData: workerHost=${req.workerHost}, workerPort=${req.workerPort}"
     )
 
-    // 1) 워커 아이피/포트/채널/스텁 등록
     val channel = ManagedChannelBuilder
       .forAddress(req.workerHost, req.workerPort)
       .usePlaintext()
@@ -304,25 +308,23 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
 
     val stub = WorkerServiceGrpc.stub(channel)
 
-    stub.notifyConnection(ConnectionRequest(host=Master.host, port=Master.port))
+    // ★ Master 가 아니라 MasterState 사용
+    stub.notifyConnection(ConnectionRequest(host = MasterState.host, port = MasterState.port))
 
-    Master.workers += Master.WorkerEntry(req.workerHost, req.workerPort, channel, stub)
-
-    Master.ShuffleReadyFlags += ((req.workerHost, req.workerPort) -> false)
+    MasterState.workers += WorkerEntry(req.workerHost, req.workerPort, channel, stub)
+    MasterState.ShuffleReadyFlags += ((req.workerHost, req.workerPort) -> false)
 
     println(
-      s"[MASTER] Worker${Master.workers.length-1} with address ${req.workerHost}:${req.workerPort} registered."
+      s"[MASTER] Worker${MasterState.workers.length-1} with address ${req.workerHost}:${req.workerPort} registered."
     )
 
-    //등록 완료되면 sampling phase 시작하기 위함
-    if (Master.workers.length == Master.numWorkers) { // test 위해 값 바꿀 수 있음, default 값은 20 유지
+    if (MasterState.workers.length == MasterState.numWorkers) {
       println("================================================================\n" +
         "[MASTER] All workers have registered. Initialize sampling phase." +
         "\n================================================================")
-      Master.whenRegisterCompleted.trySuccess(())
+      MasterState.whenRegisterCompleted.trySuccess(())
     }
 
-    // registerWorker 의 응답은 그냥 바로 성공 리턴
     Future.successful(WorkerDataResponse())
   }
 
@@ -334,23 +336,20 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
   override def readyToShuffle(req: ReadyRequest): Future[ReadyResponse] = Future {
     val key = (req.host, req.port)
 
-    // 해당 worker가 Master.workers 목록에 존재하는지 확인
-    if (!Master.ShuffleReadyFlags.contains(key)) {
+    if (!MasterState.ShuffleReadyFlags.contains(key)) {
       println(s"[MASTER] WARNING: readyToShuffle received from unknown worker ${req.host}:${req.port}")
     } else {
-      // ready 표시
-      Master.ShuffleReadyFlags.update(key, true)
+      MasterState.ShuffleReadyFlags.update(key, true)
       println(s"[MASTER] Worker at ${req.host}:${req.port} is ready to shuffle.")
     }
 
-    // 모든 worker가 ready 되었는지 검사
-    val allReady = Master.ShuffleReadyFlags.values.forall(_ == true)
+    val allReady = MasterState.ShuffleReadyFlags.values.forall(_ == true)
 
-    if (allReady && !Master.whenAllReadyToShuffle.isCompleted) {
+    if (allReady && !MasterState.whenAllReadyToShuffle.isCompleted) {
       println("=====================================================")
       println("[MASTER] All workers are ready to shuffle!")
       println("=====================================================")
-      Master.whenAllReadyToShuffle.trySuccess(())
+      MasterState.whenAllReadyToShuffle.trySuccess(())
     }
 
     ReadyResponse()
@@ -359,23 +358,22 @@ class MasterServiceImpl(implicit ec: ExecutionContext)
   override def readyToMerge(req: ReadyRequest) : Future[ReadyResponse] = Future {
     val key = (req.host, req.port)
 
-    if (!Master.MergeReadyFlags.contains(key)) {
-      Master.MergeReadyFlags += (key -> false)
+    if (!MasterState.MergeReadyFlags.contains(key)) {
+      MasterState.MergeReadyFlags += (key -> false)
     }
 
-    Master.MergeReadyFlags.update(key, true)
+    MasterState.MergeReadyFlags.update(key, true)
     println(s"[MASTER] Worker at ${req.host}:${req.port} is ready to merge.")
 
-    val allReady = Master.MergeReadyFlags.values.forall(_ == true)
+    val allReady = MasterState.MergeReadyFlags.values.forall(_ == true)
 
-    if (allReady && !Master.whenAllReadyToMerge.isCompleted) {
+    if (allReady && !MasterState.whenAllReadyToMerge.isCompleted) {
       println("===============================================")
       println("[MASTER] All workers finished shuffle! Starting merge phase.")
       println("===============================================")
-      Master.whenAllReadyToMerge.trySuccess(())
+      MasterState.whenAllReadyToMerge.trySuccess(())
     }
 
     ReadyResponse()
   }
-
 }

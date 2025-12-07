@@ -10,7 +10,8 @@ val scalaPbVersion = "0.11.20"
 // 공통 의존성
 lazy val sharedDependencies = Seq(
   "io.grpc" % "grpc-netty" % grpcVersion,
-  "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalaPbVersion
+  "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalaPbVersion,
+  "org.scalatest" %% "scalatest" % "3.2.19" % Test
 )
 
 // ------------------------------------------------------------
@@ -44,15 +45,16 @@ lazy val commonMergeStrategy: String => MergeStrategy = {
 // master 모듈
 // ------------------------------------------------------------
 lazy val master = (project in file("master"))
-  .dependsOn(common)                              // ★ common 의존
+  .dependsOn(common)
   .settings(
     name := "master",
     libraryDependencies ++= sharedDependencies,
-    Compile / mainClass := Some("master.Master"), // 네 Master 오브젝트 FQCN
+    Compile / mainClass := Some("master.Master"),
     assembly / assemblyJarName := "master.jar",
     assembly / assemblyMergeStrategy := commonMergeStrategy
   )
   .enablePlugins(sbtassembly.AssemblyPlugin)
+
 
 
 // ------------------------------------------------------------
