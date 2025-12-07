@@ -26,7 +26,7 @@ class WorkerServiceImplSpec extends AnyFunSuite {
     }
   }
 
-  test("getSamples: inputDirs에 정규 파일이 없으면 samples는 비어 있어야 한다") {
+  test("getSamples - no regular files -> empty samples") {
     withTempDir { inputDir =>
       val outputDir = Files.createTempDirectory("worker-out-")
 
@@ -44,7 +44,7 @@ class WorkerServiceImplSpec extends AnyFunSuite {
     }
   }
 
-  test("getSamples: 고정 길이 레코드 파일이 있으면 sample key를 뽑아야 한다") {
+  test("getSamples - fixed-length file -> extract keys") {
     withTempDir { inputDir =>
       val outputDir = Files.createTempDirectory("worker-out-")
 
@@ -83,7 +83,7 @@ class WorkerServiceImplSpec extends AnyFunSuite {
       // 2) 각 키의 길이는 10이어야 함
       assert(resp.samples.forall(_.length == keySize))
 
-      // 3) 우리가 넣어둔 key 값이 적어도 하나는 나와야 합리적
+      // 3) 우리가 넣어둔 key 값이 적어도 하나는 나와야 함
       assert(resp.samples.exists(_ == "KEY0000000"))
     }
   }

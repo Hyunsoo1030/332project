@@ -2,13 +2,14 @@ package worker
 
 import io.grpc.{ManagedChannelBuilder, Server, ServerBuilder}
 
-import scala.concurrent.{Await, ExecutionContext, Future, Promise}
+import scala.concurrent.{Await, ExecutionContext, Future, Promise, blocking}
 import proto.common._
 import proto.common.{MasterServiceGrpc, WorkerServiceGrpc}
 
 import java.nio.file.{Files, Path, Paths, StandardOpenOption}
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executors
 import scala.jdk.CollectionConverters._
 import scala.util.{Random, Failure, Success}
 import proto.common.WorkerServiceGrpc.WorkerServiceStub
@@ -174,6 +175,10 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
 
   private val sampleBytes: Long = 1024L * 1024L // 1MB
 
+  private val ioPool = Executors.newFixedThreadPool(4)
+  private val ioEc: ExecutionContext =
+    ExecutionContext.fromExecutor(ioPool)
+
   // shuffle helper
   private def GetPartitionFile(srcOrder: Int, partitionIndex: Int): Path = {
     Paths.get(s"partition_${srcOrder}_${partitionIndex}.txt")
@@ -256,11 +261,12 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
     // 응답 객체
     ShutdownResponse()
   }.andThen { case _ =>
+    ioPool.shutdown()
     Worker.server.shutdown()
     new Thread(() => System.exit(0)).start()}
 
   /** 디스크에서 1MB만 읽어서 Samples로 리턴 */
-  override def getSamples(req: SampleRequest): Future[SampleResponse] = Future {
+  override def getSamples(req: SampleRequest): Future[SampleResponse] = Future (blocking {
     println("[WORKER] getSamples called.")
 
     val RecordSize  = 100
@@ -333,7 +339,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
         SampleResponse(samples = samplesBuilder.result())
       }
     }
-  }
+  })(ioEc)
 
   override def sendPivots(req: PivotRequest): Future[PivotResponse] = Future {
     println("[WORKER] sendPivots called.") // TODO: 워커들 간 채널 구축하고 저장하기 - 본인 채널 안 열게 조심
@@ -387,7 +393,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
     // -------------------------------
     // 1) 자기 로컬 partition 먼저 읽기
     // -------------------------------
-    def readLocalPartition(): Future[Unit] = Future {
+    def readLocalPartition(): Future[Unit] = Future (blocking {
       val localSrcOrder = Worker.myOrder
       var chunkIndex    = 0
       var cont          = true
@@ -405,7 +411,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
         cont = hasMore
         chunkIndex += 1
       }
-    }
+    })(ioEc)
 
     // -------------------------------
     // 2) 한 워커에서 모든 chunk를 pull
@@ -461,7 +467,7 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
   // --------------------------
   // sendData: partition 파일을 chunk 단위로 읽어 응답
   // --------------------------
-  override def sendData(req: DataRequest): Future[DataResponse] = Future {
+  override def sendData(req: DataRequest): Future[DataResponse] = Future (blocking {
     val srcOrder       = Worker.myOrder        // 나(보내는 쪽)의 order
     val partitionIndex = req.partitionIndex    // 이 데이터를 받아갈 최종 워커
     val chunkIndex     = req.chunkIndex
@@ -475,9 +481,9 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
       payload = lines.map(line => Entity(line = line)),
       hasMore = hasMore
     )
-  }
+  })(ioEc)
 
-  override def startMerge(req: MergeRequest): Future[MergeResponse] = Future {
+  override def startMerge(req: MergeRequest): Future[MergeResponse] = Future (blocking {
     val myOrder = Worker.myOrder
     val inputPath  = Paths.get(outputDir, s"shuffled-part-$myOrder.out")
     val outputPath = Paths.get(outputDir, s"final-$myOrder.txt")
@@ -491,6 +497,6 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
       println(s"[WORKER-$myOrder] Merge completed → $outputPath")
       MergeResponse()
     }
-  }
+  })(ioEc)
 
 }
