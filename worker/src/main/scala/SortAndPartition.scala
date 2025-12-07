@@ -3,7 +3,7 @@ package worker
 import java.io._
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.{ExecutorService, Executors, Semaphore}
-import java.nio.file.{Files, Path, Paths, StandardOpenOption}
+import java.nio.file.{Files, Path, Paths}
 
 import scala.collection.mutable.{ListBuffer, PriorityQueue}
 import scala.concurrent.{Await, ExecutionContext, Future}
@@ -49,6 +49,7 @@ object SortAndPartition {
     val chunkFutures = ListBuffer[Future[Path]]()
     val buffer = ListBuffer[String]()
     var totalInputSize: Long = 0
+    var totalChunkSize: Long = 0
 
     inputDirs.foreach { dir =>
       val d = new File(dir)
@@ -64,6 +65,8 @@ object SortAndPartition {
               val chunk = buffer.toList
               buffer.clear()
               chunkFutures += sortChunkAsync(chunk)
+              println(s"[WORKER] Make chunk file = ${chunk.size} lines.")
+              totalChunkSize += chunk.size
             }
           }
 
@@ -71,12 +74,16 @@ object SortAndPartition {
         }
       }
     }
-    println(s"[WORKER] Total input size = $totalInputSize bytes")
 
     // 마지막 chunk 처리
     if (buffer.nonEmpty) {
       chunkFutures += sortChunkAsync(buffer.toList)
+      println(s"[WORKER] Make chunk file = ${buffer.toList.size} lines.")
+      totalChunkSize += buffer.toList.size
     }
+
+    println(s"[WORKER] Total input files size = $totalInputSize bytes.")
+    println(s"[WORKER] Total chunk files size = $totalChunkSize lines.")
 
     Await.result(Future.sequence(chunkFutures.toList), Duration.Inf)
   }
@@ -106,11 +113,18 @@ object SortAndPartition {
     val out = Files.createTempFile("merged_", ".tmp")
     val bw = new BufferedWriter(new FileWriter(out.toFile))
 
+    val recoreLength = 100
+
     while (pq.nonEmpty) {
       val Entry(line, idx) = pq.dequeue()
 
-      bw.write(line)
-      bw.newLine()
+      val fixed =
+        if (line.length >= recoreLength - 1)
+          line.substring(0, recoreLength - 1)
+        else line.padTo(recoreLength - 1, ' ')
+
+      bw.write(fixed)
+      bw.write("\n")    // 또는 "\n", 반드시 lineLength 유지
 
       val it = readers(idx)
       if (it.hasNext)
@@ -269,7 +283,7 @@ object SortAndPartition {
 
       println("[WORKER] K-way merging...")
       val merged = multiLevelMerge(chunks)
-      println(s"[WORKER] Merge complete: $merged")
+      println(s"[WORKER] Merge complete: ${merged.toFile.length()} bytes.")
 
       println("[WORKER] Partitioning...")
       partitionSortedFile(merged, pivotList, myorder)
@@ -278,6 +292,7 @@ object SortAndPartition {
       println("[WORKER] Sort and partition complete.")
     }
   }
+
   // 1) 단일 파일에서 chunk들을 만드는 버전
   private def createSortedChunksFromFile(file: Path): Future[List[Path]] = Future {
     val chunkFutures = ListBuffer[Future[Path]]()
@@ -318,5 +333,4 @@ object SortAndPartition {
     Files.deleteIfExists(outputPath)
     Files.move(merged, outputPath)
   }
-
 }
