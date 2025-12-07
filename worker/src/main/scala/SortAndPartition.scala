@@ -3,7 +3,7 @@ package worker
 import java.io._
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.{ExecutorService, Executors, Semaphore}
-import java.nio.file.{Files, Path, Paths}
+import java.nio.file.{Files, Path, Paths, StandardCopyOption}
 
 import scala.collection.mutable.{ListBuffer, PriorityQueue}
 import scala.concurrent.{Await, ExecutionContext, Future}
@@ -35,7 +35,6 @@ object SortAndPartition {
   // ------------------------------------------------------
   //                     CHUNK SORT
   // ------------------------------------------------------
-
   private def sortChunkAsync(lines: List[String]): Future[Path] = Future {
     val sorted = lines.sorted(lineOrdering)
 
@@ -51,6 +50,13 @@ object SortAndPartition {
     var totalInputSize: Long = 0
     var totalChunkSize: Long = 0
 
+    def submitChunk(chunk: List[String]): Unit = {
+      chunkSemaphore.acquire()
+      val f = sortChunkAsync(chunk)
+      chunkFutures += f
+      f.onComplete(_ => chunkSemaphore.release())
+    }
+
     inputDirs.foreach { dir =>
       val d = new File(dir)
       if (d.exists && d.isDirectory) {
@@ -64,7 +70,8 @@ object SortAndPartition {
             if (buffer.size >= ChunkSize) {
               val chunk = buffer.toList
               buffer.clear()
-              chunkFutures += sortChunkAsync(chunk)
+
+              submitChunk(chunk)
               println(s"[WORKER] Make chunk file = ${chunk.size} lines.")
               totalChunkSize += chunk.size
             }
@@ -77,7 +84,7 @@ object SortAndPartition {
 
     // 마지막 chunk 처리
     if (buffer.nonEmpty) {
-      chunkFutures += sortChunkAsync(buffer.toList)
+      submitChunk(buffer.toList)
       println(s"[WORKER] Make chunk file = ${buffer.toList.size} lines.")
       totalChunkSize += buffer.toList.size
     }
@@ -96,9 +103,15 @@ object SortAndPartition {
   private implicit val entryOrdering: Ordering[Entry] =
     Ordering.by(_.line.take(KeyLength))
 
-  private def mergeSortedChunks(chunkFiles: List[Path]): Path = {
-    if (chunkFiles.size == 1)
+  private def mergeSortedChunks(chunkFiles: List[Path], myOrder: Int, isFinal: Boolean): Path = {
+    if (chunkFiles.size == 1) {
+      if (isFinal) {
+        val finalPath = Paths.get(s"final-$myOrder")
+        Files.move(chunkFiles.head, finalPath, StandardCopyOption.REPLACE_EXISTING)
+        return finalPath
+      }
       return chunkFiles.head
+    }
 
     val readers = chunkFiles.map(p => Source.fromFile(p.toFile).getLines())
 
@@ -110,7 +123,12 @@ object SortAndPartition {
         pq.enqueue(Entry(it.next(), idx))
     }
 
-    val out = Files.createTempFile("merged_", ".tmp")
+    val out: Path =
+      if (isFinal)
+        Paths.get(s"final-$myOrder")
+      else
+        Files.createTempFile("merged", ".tmp")
+
     val bw = new BufferedWriter(new FileWriter(out.toFile))
 
     val recoreLength = 100
@@ -136,7 +154,7 @@ object SortAndPartition {
   }
 
   // fanIn 개씩 묶어서 단계적으로 파일 수를 줄임
-  private def multiLevelMerge(files: List[Path], fanIn: Int = 32): Path = {
+  private def multiLevelMerge(files: List[Path], myOrder: Int, isFinal: Boolean, fanIn: Int = 32): Path = {
     var current = files
 
     while (current.size > 1) {
@@ -144,7 +162,7 @@ object SortAndPartition {
 
       val merged = grouped.map { group =>
         Future {
-          mergeSortedChunks(group)
+          mergeSortedChunks(group, myOrder, isFinal)
         }
       }
 
@@ -282,7 +300,7 @@ object SortAndPartition {
       println(s"[WORKER] Created ${chunks.size} chunks.")
 
       println("[WORKER] K-way merging...")
-      val merged = multiLevelMerge(chunks)
+      val merged = multiLevelMerge(chunks, myorder, false)
       println(s"[WORKER] Merge complete: ${merged.toFile.length()} bytes.")
 
       println("[WORKER] Partitioning...")
@@ -293,44 +311,7 @@ object SortAndPartition {
     }
   }
 
-  // 1) 단일 파일에서 chunk들을 만드는 버전
-  private def createSortedChunksFromFile(file: Path): Future[List[Path]] = Future {
-    val chunkFutures = ListBuffer[Future[Path]]()
-    val buffer = ListBuffer[String]()
-
-    val br = Source.fromFile(file.toFile)
-    try {
-      for (line <- br.getLines()) {
-        buffer += line
-        if (buffer.size >= ChunkSize) {
-          val chunk = buffer.toList
-          buffer.clear()
-          chunkFutures += sortChunkAsync(chunk)
-        }
-      }
-    } finally {
-      br.close()
-    }
-
-    if (buffer.nonEmpty) {
-      chunkFutures += sortChunkAsync(buffer.toList)
-    }
-
-    Await.result(Future.sequence(chunkFutures.toList), Duration.Inf)
-  }
-
-  // 2) 단일 파일을 외부 정렬해서 outputPath로 저장하는 함수
-  def externalSortFile(inputPath: Path, outputPath: Path): Unit = {
-    println(s"[WORKER] externalSortFile: input=$inputPath output=$outputPath")
-
-    val chunks = Await.result(createSortedChunksFromFile(inputPath), Duration.Inf)
-    println(s"[WORKER] externalSortFile: created ${chunks.size} chunks")
-
-    val merged = multiLevelMerge(chunks)
-    println(s"[WORKER] externalSortFile: merged => $merged")
-
-    // 최종 결과를 outputPath로 이동
-    Files.deleteIfExists(outputPath)
-    Files.move(merged, outputPath)
+  def mergeFiles(files: List[Path], myOrder: Int, isFinal: Boolean, fanIn: Int = 32): Path = {
+    multiLevelMerge(files, myOrder, isFinal, fanIn)
   }
 }

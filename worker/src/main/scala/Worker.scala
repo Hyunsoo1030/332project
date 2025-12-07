@@ -179,12 +179,17 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
     Paths.get(s"partition_${srcOrder}_${partitionIndex}.txt")
   }
 
+  // WorkerServiceImpl 안
+
   private def appendLinesToLocalFile(partitionIndex: Int,
                                      senderOrder: Int,
                                      lines: Seq[String]): Unit = {
     if (lines.isEmpty) return
 
-    val path = Paths.get(outputDir, s"shuffled-part-$partitionIndex.out")
+    // 예: shuffle-0-from-2.tmp  (dst=0, src=2)
+    val path = Paths.get(outputDir, s"shuffle-$partitionIndex-from-$senderOrder.tmp")
+
+    println(s"[DEBUG] appendLines → dst=$partitionIndex from=$senderOrder lines=${lines.size} file=$path")
 
     val writer = Files.newBufferedWriter(
       path,
@@ -200,7 +205,10 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
     } finally {
       writer.close()
     }
+    val size = Files.size(path)
+    println(s"[DEBUG] file updated → $path (${size} bytes)")
   }
+
 
   private def readChunkFromFile(file: Path,
                                 chunkIndex: Int,
@@ -480,22 +488,47 @@ class WorkerServiceImpl(inputDirs: ListBuffer[String], outputDir: String        
 
   override def startMerge(req: MergeRequest): Future[MergeResponse] = Future {
     val myOrder = Worker.myOrder
-    val inputPath  = Paths.get(outputDir, s"shuffled-part-$myOrder.out")
-    val outputPath = Paths.get(outputDir, s"final-$myOrder.txt")
+    val dir = Paths.get(outputDir)
 
-    if (!Files.exists(inputPath)) {
-      println(s"[WORKER-$myOrder] No shuffled file found: $inputPath")
+    if (!Files.exists(dir) || !Files.isDirectory(dir)) {
+      println(s"[WORKER-$myOrder] Output directory does not exist: $dir")
       MergeResponse()
     } else {
-      println(s"[WORKER-$myOrder] startMerge: external sort on $inputPath")
-      SortAndPartition.externalSortFile(inputPath, outputPath)
-      println(s"[WORKER-$myOrder] Merge completed → $outputPath")
+      import scala.jdk.CollectionConverters._
 
-      println(s"[WORKER-$myOrder] deleting shuffled file: $inputPath")
-      Files.deleteIfExists(inputPath)
+      // 이 워커가 최종적으로 가져갈 shuffle 조각들
+      val shuffleFiles: List[Path] =
+        Files.list(dir).iterator().asScala
+          .filter { p =>
+            val name = p.getFileName.toString
+            name.startsWith(s"shuffle-$myOrder-from-")
+          }
+          .toList
 
-      MergeResponse()
+      if (shuffleFiles.isEmpty) {
+        println(s"[WORKER-$myOrder] No shuffle files found in $dir")
+        MergeResponse()
+      } else {
+        println(s"[WORKER-$myOrder] startMerge: merging ${shuffleFiles.size} shuffle files")
+
+        // tmp 파일로 먼저 merge (출력 경로는 SortAndPartition 쪽 로직에 따름)
+        val mergedTmp: Path =
+          SortAndPartition.mergeFiles(shuffleFiles, myOrder, isFinal = true)
+
+        // 우리가 원하는 최종 결과 경로 (예전과 동일하게)
+        val outputPath = dir.resolve(s"final-$myOrder.txt")
+
+        Files.deleteIfExists(outputPath)
+        Files.move(mergedTmp, outputPath)
+
+        // 사용한 shuffle 조각 파일 삭제
+        shuffleFiles.foreach(p => Files.deleteIfExists(p))
+
+        println(s"[WORKER-$myOrder] Merge completed → $outputPath")
+        MergeResponse()
+      }
     }
   }
+
 
 }
