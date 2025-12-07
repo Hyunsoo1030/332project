@@ -21,6 +21,6 @@ sbt worker/assembly
 ```
 3. Execute the Master server  
 `master [# of workers]`
-4. Execute the Workers  
+4. Execute the Workers using 
    `worker 2.2.2.254:8915 -I [directory0] [directory1] ... -O [output direcotry]`  
 Or you can just use `smalltest [# of workers]`, `bigtest [# of workers]`, and `largetest [# of workers]` in another terminal of Master to execute this program.
